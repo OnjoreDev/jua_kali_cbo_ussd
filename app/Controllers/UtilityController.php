@@ -249,7 +249,7 @@ class UtilityController extends Controller
                         $newBalance = $mainBalance - $requestedAmount;
                         $this->utility->updateWalletBalance($MSISDN, 1, -$requestedAmount);
                         $this->utility->logDemoTransaction($MSISDN, "Debit", $requestedAmount, $newBalance, "M-Pesa Payout Simulation");
-                        $ussdResponse = "END [DEMO] Payout Transferred!";
+                        $ussdResponse = "END Payout Transferred!";
                     }
                     break;
 
