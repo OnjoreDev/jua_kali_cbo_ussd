@@ -82,7 +82,6 @@ class Utility extends Model
      */
     public function logDemoTransaction(string $phoneNumber, string $type, float $amount, float $currentBalance, string $desc): bool
     {
-        // Fetch internal member ID matching the phone number
         $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
         $stmtMem->execute([':phone' => $phoneNumber]);
         $member = $stmtMem->fetch(PDO::FETCH_ASSOC);
@@ -100,11 +99,11 @@ class Utility extends Model
         $stmt = $this->pdo->prepare($sql);
         return $stmt->execute([
             ':member_id' => $memberId,
-            ':type' => $type,
-            ':amount' => (int)$amount,
-            ':balance' => (int)$currentBalance,
-            ':receipt' => $receipt,
-            ':desc' => $desc
+            ':type'      => $type,
+            ':amount'    => $amount,
+            ':balance'   => $currentBalance,
+            ':receipt'   => $receipt,
+            ':desc'      => $desc
         ]);
     }
 
@@ -115,30 +114,33 @@ class Utility extends Model
     {
         $this->logger->info("Processing simulated deposit for {$phoneNumber}, Amount: {$amount}");
 
-        // 1. Credit target wallet ledger
+        // 1. Credit target wallet ledger balance atomically
         $this->updateWalletBalance($phoneNumber, $walletTypeId, $amount);
 
-        // 2. Fetch balance threshold for transaction auditing
+        // 2. Fetch current balance configuration for auditing and logging records
         $balances = $this->getMemberBalances($phoneNumber);
         $newBalance = 0.0;
         foreach ($balances as $b) {
-            if ($b['wallet_type_id'] == $walletTypeId) {
+            if ((int)$b['wallet_type_id'] === $walletTypeId) {
                 $newBalance = (float)$b['balance'];
             }
         }
 
-        $label = ($walletTypeId === 1) ? "Main Account" : "Welfare Fund";
-        $this->logDemoTransaction($phoneNumber, "Credit", $amount, $newBalance, "Simulated M-Pesa STK Deposit to {$label}");
+        $label = ($walletTypeId === 1) ? "main" : "welfare";
+        $this->logDemoTransaction($phoneNumber, "Credit", $amount, $newBalance, "Simulated M-Pesa STK Deposit to {$label} account");
 
-        // 3. Supermarket Reward Principle Engine: Every KES 100 Deposited into Main or Welfare earns 1 Point
+        // 3. Loyalty Reward Rule: Every KES 100 deposited into main or welfare earns 1 Point
         if ($amount >= 100 && ($walletTypeId === 1 || $walletTypeId === 2)) {
             $awardedPoints = floor($amount / 100);
-            $this->updateWalletBalance($phoneNumber, 3, $awardedPoints); // ID 3 is chama points
+            $this->updateWalletBalance($phoneNumber, 3, $awardedPoints);
 
-            // Find points balance for ledger logging
+            // Recalculate dynamic points balance state for logging
+            $updatedBalances = $this->getMemberBalances($phoneNumber);
             $ptsBalance = 0.0;
-            foreach ($balances as $b) {
-                if ($b['wallet_type_id'] == 3) $ptsBalance = (float)$b['balance'] + $awardedPoints;
+            foreach ($updatedBalances as $b) {
+                if ((int)$b['wallet_type_id'] === 3) {
+                    $ptsBalance = (float)$b['balance'];
+                }
             }
             $this->logDemoTransaction($phoneNumber, "Credit", $awardedPoints, $ptsBalance, "Loyalty Points earned from Deposit");
         }
@@ -174,18 +176,14 @@ class Utility extends Model
 
     public function createSession(string $sessionId, string $msisdn, string $ussdCode): bool
     {
-        // 1. Double check your SQL placeholders match your table structure exactly
         $sql = "INSERT INTO ussd_inbox (session_id, msisdn, shortcode, temp_level) 
             VALUES (:session_id, :msisdn, :shortcode, :temp_level)";
-
         $stmt = $this->pdo->prepare($sql);
-
-        // 2. The keys in this array MUST perfectly match the tokens above
         return $stmt->execute([
             ':session_id' => $sessionId,
             ':msisdn'     => $msisdn,
             ':shortcode'  => $ussdCode,
-            ':temp_level' => 'MemberMainMenu' // or whatever default starting state you want
+            ':temp_level' => 'MemberMainMenu'
         ]);
     }
 }
