@@ -149,11 +149,13 @@ class Utility extends Model
     }
 
     /**
-     * BIND PARAMETER FIXES FOR SECURITY LOGGING
+     * FIX: Use IFNULL to prevent updates from breaking when message is an empty/NULL column string initially
      */
     public function saveInput(string $input, string $sessionId)
     {
-        $insertSQL = "UPDATE ussd_inbox SET message = concat(message, '|', :input) WHERE session_id = :session_id LIMIT 1";
+        $insertSQL = "UPDATE ussd_inbox 
+                      SET message = CONCAT(IFNULL(message, ''), '|', :input) 
+                      WHERE session_id = :session_id LIMIT 1";
         $stmt = $this->pdo->prepare($insertSQL);
         $stmt->execute([':input' => $input, ':session_id' => $sessionId]);
     }
@@ -174,16 +176,20 @@ class Utility extends Model
         return $result ? $result[0] : null;
     }
 
+    /**
+     * FIX: Populate the initial shortcode string straight into the message column during creation
+     */
     public function createSession(string $sessionId, string $msisdn, string $ussdCode): bool
     {
-        $sql = "INSERT INTO ussd_inbox (session_id, msisdn, shortcode, temp_level) 
-            VALUES (:session_id, :msisdn, :shortcode, :temp_level)";
+        $sql = "INSERT INTO ussd_inbox (session_id, msisdn, shortcode, temp_level, message) 
+                VALUES (:session_id, :msisdn, :shortcode, :temp_level, :message)";
         $stmt = $this->pdo->prepare($sql);
         return $stmt->execute([
             ':session_id' => $sessionId,
             ':msisdn'     => $msisdn,
             ':shortcode'  => $ussdCode,
-            ':temp_level' => 'MemberMainMenu'
+            ':temp_level' => 'MemberMainMenu',
+            ':message'    => $ussdCode
         ]);
     }
 }
