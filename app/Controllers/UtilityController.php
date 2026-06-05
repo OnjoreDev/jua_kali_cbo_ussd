@@ -158,7 +158,7 @@ class UtilityController extends Controller
                     } elseif ($lastInput === "5") {
                         $ussdResponse = "END Your loan request has been received.";
                     } elseif ($lastInput === "6") {
-                        $ussdResponse = "END Dial +2547XXXXXXXX for support.";
+                        $ussdResponse = "END Dial +254790727272 for support.";
                     } else {
                         $ussdResponse = "CON Invalid choice.\n" . $this->renderMainMenu();
                     }
@@ -176,7 +176,7 @@ class UtilityController extends Controller
                             $wallet = $wallets[$selectedIndex];
                             $symbol = (strtolower($wallet['currency']) === 'ksh') ? 'KES' : 'Points';
                             $formattedBal = number_format((float)$wallet['balance'], 2);
-                            $ussdResponse = "END Your " . ucfirst($wallet['wallet_name']) . " balance is {$symbol} {$formattedBal}.";
+                            $ussdResponse = "CON Your " . ucfirst($wallet['wallet_name']) . " balance is {$symbol} {$formattedBal}. \n00. Back";
                         } else {
                             $ussdResponse = "END Selection failed.";
                         }
@@ -190,7 +190,7 @@ class UtilityController extends Controller
                         $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
                     } elseif ($lastInput === "1" || $lastInput === "2") {
                         $targetName = ($lastInput === "1") ? "Main Wallet" : "Welfare Wallet";
-                        $ussdResponse = "CON Enter Amount to Deposit to {$targetName}:";
+                        $ussdResponse = "CON Enter Amount to Deposit to {$targetName}: \n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "DepositAmountCapture");
                     } else {
                         $ussdResponse = "END Option unavailable.";
@@ -215,7 +215,7 @@ class UtilityController extends Controller
 
                     $walletLabel = ($targetWalletId === 1) ? "Main Wallet" : "Welfare Wallet";
                     $this->utility->processSimulatedDeposit($MSISDN, $targetWalletId, $amount);
-                    $ussdResponse = "END [DEMO] KES " . number_format($amount, 2) . " credited to {$walletLabel}.";
+                    $ussdResponse = "CON KES " . number_format($amount, 2) . " credited to {$walletLabel}. \n00. Back";
                     break;
 
                 case "WithdrawMenuSelect":
@@ -271,7 +271,7 @@ class UtilityController extends Controller
                         $this->utility->updateWalletBalance($MSISDN, 2, $contributionAmount);
                         $this->utility->logDemoTransaction($MSISDN, "Debit", $contributionAmount, ($mainBalance - $contributionAmount), "Welfare sweep");
                         $this->utility->logDemoTransaction($MSISDN, "Credit", $contributionAmount, ($welfareBalance + $contributionAmount), "Welfare allocation");
-                        $ussdResponse = "END [DEMO] Contribution Cleared!";
+                        $ussdResponse = "END Contribution Cleared!";
                     }
                     break;
 
@@ -287,9 +287,9 @@ class UtilityController extends Controller
                             if ((int)$w['wallet_type_id'] === 3) $points = (float)$w['balance']; 
                         }
                         $cashValue = $points * 0.50;
-                        $ussdResponse = "END Balance: {$points} Points (KES " . number_format($cashValue, 2) . ")";
+                        $ussdResponse = "CON Balance: {$points} Points (KES " . number_format($cashValue, 2) . ") \n00. Back";
                     } elseif ($lastInput === "2") {
-                        $ussdResponse = "CON Enter Points to redeem:";
+                        $ussdResponse = "CON Enter Points to redeem: \n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "ExecutePointsRedemption");
                     }
                     break;
