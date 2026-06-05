@@ -60,7 +60,6 @@ class UtilityController extends Controller
         $MSISDN = $this->normalizePhoneNumber($queryParams["MSISDN"] ?? '');
         $INPUT = rawurldecode($queryParams["INPUT"] ?? '');
 
-        // Standardize splitting of incoming parameter array selections
         $inputArray = ($INPUT === "") ? [] : explode("*", $INPUT); 
         $lastInput = end($inputArray); 
         $ussdResponse = "";
@@ -71,12 +70,10 @@ class UtilityController extends Controller
             'input' => $INPUT
         ]);
 
-        // FIX: Capture initial route dial options cleanly
         if ($INPUT === "" || $lastInput === "39" || $lastInput === "00") {
             if ($lastInput !== "00") {
                 $this->utility->createSession($SESSIONID, $MSISDN, $USSDCODE);
             } else {
-                // If backtracking to menu via '00', log the navigation input step
                 $this->utility->saveInput($lastInput, $SESSIONID);
             }
 
@@ -116,8 +113,6 @@ class UtilityController extends Controller
 
                 case "CaptureVocation":
                     $this->utility->saveInput($lastInput, $SESSIONID);
-                    
-                    // Fetch accurate relative offset data items directly from input collections
                     $fullName = $inputArray[1] ?? 'Unknown';
                     $phoneNumber = $this->normalizePhoneNumber($inputArray[2] ?? $MSISDN);
                     $vocation = $lastInput; 
@@ -132,6 +127,19 @@ class UtilityController extends Controller
 
                     if ($lastInput === "1") {
                         $wallets = $this->utility->getMemberBalances($MSISDN);
+                        
+                        // Check if total aggregated structural balance across all accounts is absolute zero
+                        $totalBalanceAcrossWallets = 0.0;
+                        foreach ($wallets as $wallet) {
+                            $totalBalanceAcrossWallets += (float)$wallet['balance'];
+                        }
+
+                        // NEW DYNAMIC REQUIREMENT: Prompt users with empty accounts to deposit first
+                        if ($totalBalanceAcrossWallets <= 0) {
+                            $ussdResponse = "END You have no active balances. Please make an M-Pesa deposit first to view your wallets.";
+                            break;
+                        }
+
                         $ussdResponse = "CON Select Account to Check:\n";
                         foreach ($wallets as $index => $wallet) {
                             $ussdResponse .= ($index + 1) . ". " . ucfirst($wallet['wallet_name']) . " Wallet\n";
@@ -145,7 +153,7 @@ class UtilityController extends Controller
                         $ussdResponse = "CON Select Transaction Type:\n1. Withdraw from Main\n2. Make Welfare Contribution\n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "WithdrawMenuSelect");
                     } elseif ($lastInput === "4") {
-                        $ussdResponse = "CON Chama Points Hub:\n1. View Points Balance\n2. Redeem Points for Cash\n00. Back";
+                        $ussdResponse = "CON Select Options:\n1. View Points Balance\n2. Redeem Points\n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "ChamaPointsHub");
                     } elseif ($lastInput === "5") {
                         $ussdResponse = "END Your loan request has been received.";
@@ -197,12 +205,11 @@ class UtilityController extends Controller
                         break;
                     }
 
-                    // Look explicitly one index backward to find selected wallet ID context safely
                     $targetWalletId = 1; 
                     if (count($inputArray) >= 2) {
                         $previousSelection = $inputArray[count($inputArray) - 2];
                         if ($previousSelection === "2") {
-                            $targetWalletId = 2; // Welfare Wallet
+                            $targetWalletId = 2; 
                         }
                     }
 

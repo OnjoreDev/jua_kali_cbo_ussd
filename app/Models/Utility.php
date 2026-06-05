@@ -20,28 +20,59 @@ class Utility extends Model
     }
 
     /**
-     * Insert a newly registered user into the members table
+     * Insert a newly registered user into the members table and auto-provision default wallets
      */
     public function registerNewMember(string $fullName, string $phoneNumber, string $vocation): bool
     {
-        $sql = "INSERT INTO members (fullname, phone_number, vocation) VALUES (:fullname, :phone_number, :vocation)";
-        $stmt = $this->pdo->prepare($sql);
+        try {
+            $this->pdo->beginTransaction();
 
-        $result = $stmt->execute([
-            ':fullname' => $fullName,
-            ':phone_number' => $phoneNumber,
-            ':vocation' => $vocation
-        ]);
+            $sql = "INSERT INTO members (fullname, phone_number, vocation) VALUES (:fullname, :phone_number, :vocation)";
+            $stmt = $this->pdo->prepare($sql);
+            $result = $stmt->execute([
+                ':fullname' => $fullName,
+                ':phone_number' => $phoneNumber,
+                ':vocation' => $vocation
+            ]);
 
-        if ($result) {
-            $this->logger->info("New member registered successfully: {$phoneNumber}");
+            if (!$result) {
+                $this->pdo->rollBack();
+                return false;
+            }
+
+            $memberId = (int)$this->pdo->lastInsertId();
+
+            // Auto-provision basic wallets dynamically based on available configuration rules
+            $typesStmt = $this->pdo->query("SELECT id FROM wallet_types");
+            $types = $typesStmt->fetchAll(PDO::FETCH_COLUMN);
+
+            if (!empty($types)) {
+                $walletSql = "INSERT IGNORE INTO wallets (member_id, balance, wallet_type_id, created_at) VALUES (:member_id, 0, :wallet_type_id, NOW())";
+                $walletStmt = $this->pdo->prepare($walletSql);
+                foreach ($types as $typeId) {
+                    $walletStmt->execute([
+                        ':member_id'      => $memberId,
+                        ':wallet_type_id' => $typeId
+                    ]);
+                }
+            }
+
+            $this->pdo->commit();
+            $this->logger->info("New member registered and wallets provisioned successfully: {$phoneNumber}");
+            return true;
+
+        } catch (\Exception $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            $this->logger->error("Registration transaction failed for {$phoneNumber}: " . $e->getMessage());
+            return false;
         }
-
-        return $result;
     }
 
     /**
      * FETCH DYNAMIC BALANCE BALANCES: Pulls directly using relational mappings 
+     * Handles lazy wallet record initialization automatically if missing.
      */
     public function getMemberBalances(string $phoneNumber): array
     {
@@ -57,7 +88,36 @@ class Utility extends Model
                 ORDER BY wt.id ASC";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute([':phone' => $phoneNumber]);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($results)) {
+            $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
+            $stmtMem->execute([':phone' => $phoneNumber]);
+            $member = $stmtMem->fetch(PDO::FETCH_ASSOC);
+
+            if ($member) {
+                $memberId = $member['id'];
+                
+                $typesStmt = $this->pdo->query("SELECT id FROM wallet_types");
+                $types = $typesStmt->fetchAll(PDO::FETCH_COLUMN);
+
+                if (!empty($types)) {
+                    $walletSql = "INSERT IGNORE INTO wallets (member_id, balance, wallet_type_id, created_at) VALUES (:member_id, 0, :wallet_type_id, NOW())";
+                    $walletStmt = $this->pdo->prepare($walletSql);
+                    foreach ($types as $typeId) {
+                        $walletStmt->execute([
+                            ':member_id'      => $memberId,
+                            ':wallet_type_id' => $typeId
+                        ]);
+                    }
+                    
+                    $stmt->execute([':phone' => $phoneNumber]);
+                    $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                }
+            }
+        }
+
+        return $results;
     }
 
     /**
@@ -149,7 +209,7 @@ class Utility extends Model
     }
 
     /**
-     * FIX: Use IFNULL to prevent updates from breaking when message is an empty/NULL column string initially
+     * BIND PARAMETER FIXES FOR SECURITY LOGGING
      */
     public function saveInput(string $input, string $sessionId)
     {
@@ -176,9 +236,6 @@ class Utility extends Model
         return $result ? $result[0] : null;
     }
 
-    /**
-     * FIX: Populate the initial shortcode string straight into the message column during creation
-     */
     public function createSession(string $sessionId, string $msisdn, string $ussdCode): bool
     {
         $sql = "INSERT INTO ussd_inbox (session_id, msisdn, shortcode, temp_level, message) 
