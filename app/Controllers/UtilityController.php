@@ -10,16 +10,22 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
 /**
- * UtilityController handles incoming USSD requests for Jua Kali CBO.
- * It manages session states, registrations, deposits, withdrawals, and points systems.
+ * UtilityController Class
+ * Manages incoming HTTP telecommunication requests from the USSD Gateway.
+ * Controls multi-step state menus, handles user interaction routing, and interfaces
+ * directly with the Utility Model for transactional storage and data retrieval.
  */
 class UtilityController extends Controller
 {
-    // Instance of the Utility model to handle database/business logic operations
+    /**
+     * Instance of the Utility model to encapsulate database interactions and business logic
+     */
     private Utility $utility;
 
     /**
-     * Inherits Logger from parent Controller and pulls Utility model from Container
+     * Dependency Injection Constructor
+     * Inherits the logging infrastructure from the base controller and resolves the model layer.
+     * * @param ContainerInterface $container PSR-11 Dependency Injection Container
      */
     public function __construct(ContainerInterface $container)
     {
@@ -28,8 +34,10 @@ class UtilityController extends Controller
     }
 
     /**
-     * Sanitizes and normalizes Kenyan MSISDNs
-     * Converts local numbers starting with 07 or 01 to the international format (254...)
+     * Normalizes Kenyan MSISDN inputs to an absolute internationalized format.
+     * Converts phone strings starting with local prefixes '07' or '01' to '254...'.
+     * * @param string $phone Raw phone string parameter from the request
+     * @return string Normalized country code standard phone number
      */
     private function normalizePhoneNumber(string $phone): string
     {
@@ -41,331 +49,278 @@ class UtilityController extends Controller
     }
 
     /**
-     * Sends a welcome SMS notification upon successful registration
-     */
-    private function sendSmsNotification(string $phone, string $message): void
-    {
-        try {
-            $this->logger->info("Sending Registration SMS to {$phone}", ['message' => $message]);
-            
-            // TODO: Integrate your SMS Gateway here (e.g., Africa's Talking or Celcom Africa)
-            // Example:
-            // $smsGateway->send($phone, $message);
-            
-        } catch (\Exception $e) {
-            $this->logger->error("Failed to send registration SMS to {$phone}: " . $e->getMessage());
-        }
-    }
-
-    /**
-     * Main Menu UI Block
-     * Returns the plain text menu string prefixed with 'CON' to keep the session alive
+     * Renders the root menu options presented to successfully registered CBO members.
+     * Preceded by the 'CON' flag to signal the telecom gateway that the session is ongoing.
+     * * @return string Multi-line string showing available service operations
      */
     private function renderMainMenu(): string
     {
-        return "CON Welcome back to Jua Kali CBO. Select an option:\n"
-             . "1. Check Balances\n"
-             . "2. Deposit Money\n"
-             . "3. Welfare \n" 
-             . "4. Withdraw / Contribute\n"
-             . "5. Chama Points\n"
-             . "6. Loan Request\n"
-             . "7. Customer Care";
+        return "CON Welcome to Jua Kali CBO. Select an option:\n"
+             . "1. Check Balance\n"
+             . "2. Welfare\n"
+             . "3. Chama Points\n"
+             . "4. Loan Request\n"
+             . "5. Withdraw Request\n"
+             . "6. Customer Care";
     }
 
     /**
-     * Slim 4 Single Action Controller
-     * Processes incoming USSD HTTP requests, manages states, and returns text/plain responses.
+     * PSR-7 Single-Action invokable execution loop.
+     * Processes state inputs, handles navigation switches, and returns raw plain text parameters.
      */
     public function __invoke(Request $request, Response $response): Response
     {
-        // Fetch all GET query parameters sent by the USSD gateway (e.g., Africa's Talking)
+        // Extract incoming query parameter strings sent by the telecom provider callback
         $queryParams = $request->getQueryParams();
         
-        // Extract individual elements, applying fallback empty strings if missing
         $SESSIONID = $queryParams["SESSIONID"] ?? '';
         $USSDCODE = rawurldecode($queryParams["USSDCODE"] ?? '');
         $MSISDN = $this->normalizePhoneNumber($queryParams["MSISDN"] ?? '');
         $INPUT = rawurldecode($queryParams["INPUT"] ?? '');
 
-        // Parse the raw USSD string. Multiple navigation choices are separated by asterisks (*)
+        // Parse continuous asterisk-concatenated inputs (e.g., "1*2*100") into an accessible traversal map
         $inputArray = ($INPUT === "") ? [] : explode("*", $INPUT); 
-        $lastInput = end($inputArray); // Isolate the most recent menu choice made by the user
+        $lastInput = end($inputArray); // Capture the isolated current user choice response
         $ussdResponse = "";
 
-        // Log transaction meta-data for auditing and debugging state movements
+        // Log the structural raw parameters for telemetry verification and auditing
         $this->logger->info("USSD Request", [
             'session' => $SESSIONID,
             'msisdn' => $MSISDN,
             'input' => $INPUT
         ]);
 
-        /**
-         * INITIAL SESSION OR LANDING LEVEL DEFINITION
-         * Triggered if the input is empty (fresh dial), or if the user hits menu anchors (39 or 00)
-         */
+        // Check if this is a fresh session initialization, a back navigation request ('00'), or a main menu shortcut ('39')
         if ($INPUT === "" || $lastInput === "39" || $lastInput === "00") {
-            // "00" is universally treated as a "Back" button, meaning the session is already created
             if ($lastInput !== "00") {
+                // Initialize an entry mapping inside the database inbox tracker for new loops
                 $this->utility->createSession($SESSIONID, $MSISDN, $USSDCODE);
             } else {
+                // Save the back command input string into the tracking trace array
                 $this->utility->saveInput($lastInput, $SESSIONID);
             }
 
-            // Route registered members directly to the main menu; otherwise, initiate registration
+            // Route user depending on registration profile status
             if ($this->utility->isMemberRegistered($MSISDN)) {
                 $ussdResponse = $this->renderMainMenu();
                 $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
             } else {
+                // Direct unregistered numbers to the dynamic sign-up workflow
                 $ussdResponse = "CON Welcome to Jua Kali CBO. You are not registered.\nReply with 1 to start registration.";
                 $this->utility->setTemplevel($SESSIONID, "PromptRegistration");
             }
         } else {
-            /**
-             * SUB-MENU / ACTIVE SESSION STATE MACHINE
-             * Fetches the current temporary process tier from the session storage to determine context
-             */
+            // Retrieve current menu position context tracking variable from database records
             $CurrentLevel = $this->utility->getTemplevel($SESSIONID);
 
+            // Execute switch matching block based on active session step states
             switch ($CurrentLevel) {
                 
-                // State: User is prompted to start registration
+                // State: Checking if the user consented to begin profiling
                 case "PromptRegistration":
                     $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "1") {
                         $ussdResponse = "CON Please enter your Full Name:";
                         $this->utility->setTemplevel($SESSIONID, "CaptureName");
                     } else {
-                        $ussdResponse = "END Registration cancelled."; // 'END' terminates the USSD session
+                        // END prefix instantly breaks the network handset call connection loop
+                        $ussdResponse = "END Registration cancelled.";
                     }
                     break;
 
-                // State: Capturing user's full name
+                // State: Capturing the text name input string
                 case "CaptureName":
                     $this->utility->saveInput($lastInput, $SESSIONID);
-                    // Bypassing phone input prompt completely: directly requesting trade/vocation
                     $ussdResponse = "CON Please enter your Vocation (e.g., Carpenter, Tailor):";
                     $this->utility->setTemplevel($SESSIONID, "CaptureVocation");
                     break;
 
-                // State: Capturing trade/vocation and saving final profile matrix
+                // State: Finalizing registration and writing profile metrics to database
                 case "CaptureVocation":
                     $this->utility->saveInput($lastInput, $SESSIONID);
                     
-                    /**
-                     * SAFE DYNAMIC ARRAY PARSING:
-                     * String sequence: 1 * [Full Name] * [Vocation]
-                     * Relative indices from end:
-                     * $lastInput (end) = Vocation
-                     * total - 2 = Full Name
-                     */
                     $totalElements = count($inputArray);
                     $vocation = $lastInput;
+                    
+                    // Traverse backwards safely within the array to fetch the previously submitted name component
                     $fullName = $inputArray[$totalElements - 2] ?? 'Unknown';
                     
-                    // Automatically assign the number that dialed into the USSD session
-                    $phoneNumber = $MSISDN;
-                    
-                    // Proceed with persistent system registration via Model
-                    $isRegistered = $this->utility->registerNewMember($fullName, $phoneNumber, $vocation);
+                    // Commit to storage layer and dispatch transactional onboarding text via Celcom Africa
+                    $isRegistered = $this->utility->registerNewMember($fullName, $MSISDN, $vocation);
                     
                     if ($isRegistered) {
-                        // SMS Alert Integration
-                        $smsText = "Welcome to Jua Kali CBO, {$fullName}! Your profile has been successfully set up as a {$vocation} using phone number {$phoneNumber}. Please dial our USSD code to access your portal balances.";
-                        $this->sendSmsNotification($phoneNumber, $smsText);
-                        
-                        $ussdResponse = "END Thank you for registering, {$fullName}.\nPlease redial the code to log into your portal.";
+                        $ussdResponse = "END Thank you for registering, {$fullName}.\nPlease redial the code to view your menu.";
                     } else {
                         $ussdResponse = "END System error during registration. Please try again later.";
                     }
-                    
-                    $this->utility->setTemplevel($SESSIONID, "RegistrationComplete");
                     break;
 
-                // State: Processing choices from the Registered Members' Main Menu
+                // State: Routing root menu options chosen by standard members
                 case "MemberMainMenu":
                     $this->utility->saveInput($lastInput, $SESSIONID);
 
-                    // Option 1: Balance Inquiry
                     if ($lastInput === "1") {
-                        $wallets = $this->utility->getMemberBalances($MSISDN);
-                        
-                        // Check if total aggregated structural balance across all accounts is absolute zero
-                        $totalBalanceAcrossWallets = 0.0;
-                        foreach ($wallets as $wallet) {
-                            $totalBalanceAcrossWallets += (float)$wallet['balance'];
-                        }
-
-                        // NEW DYNAMIC REQUIREMENT: Prompt users with empty accounts to deposit first
-                        if ($totalBalanceAcrossWallets <= 0) {
-                            $ussdResponse = "END You have no active balances. Please make an M-Pesa deposit first to view your wallets.";
-                            break;
-                        }
-
-                        // Display list of dynamic wallets registered to the member
-                        $ussdResponse = "CON Select Account to Check:\n";
-                        foreach ($wallets as $index => $wallet) {
-                            $ussdResponse .= ($index + 1) . ". " . ucfirst($wallet['wallet_name']) . " Wallet\n";
-                        }
-                        $ussdResponse .= "00. Back";
+                        $ussdResponse = "CON Select Account to Check Balance:\n"
+                                     . "1. Main Wallet\n"
+                                     . "2. Welfare Wallet\n"
+                                     . "3. Loan Wallet\n"
+                                     . "00. Back";
                         $this->utility->setTemplevel($SESSIONID, "SelectBalanceAccount");
 
-                    // Option 2: Navigate to Wallet Selection for Deposits
                     } elseif ($lastInput === "2") {
-                        $ussdResponse = "CON Select Wallet to Deposit into:\n1. Main Wallet\n2. Welfare Wallet\n00. Back";
-                        $this->utility->setTemplevel($SESSIONID, "DepositWalletSelect");
+                        $ussdResponse = "CON Welfare Hub:\n1. Deposit\n2. Claim\n3. Status\n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "WelfareMenuSelect");
 
-                    // Option 3: Withdrawals or Welfare Sweeps
                     } elseif ($lastInput === "3") {
-                        $ussdResponse = "CON Select Transaction Type:\n1. Withdraw from Main\n2. Make Welfare Contribution\n00. Back";
-                        $this->utility->setTemplevel($SESSIONID, "WithdrawMenuSelect");
-
-                    // Option 4: Points Dashboard access
-                    } elseif ($lastInput === "4") {
-                        $ussdResponse = "CON Select Options:\n1. View Points Balance\n2. Redeem Points\n00. Back";
+                        $ussdResponse = "CON Chama Points Hub:\n1. View Points Balance\n2. Redeem Points\n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "ChamaPointsHub");
 
-                    // Option 5: Static feedback form for loan requests
+                    } elseif ($lastInput === "4") {
+                        $ussdResponse = "END Your loan request has been received. A confirmation message has been sent to your phone.";
+                        // Async alerts trigger direct SMS workflows then exit session connection immediately
+                        $this->utility->sendLoanRequestAlert($MSISDN);
+
                     } elseif ($lastInput === "5") {
-                        $ussdResponse = "END Your loan request has been received.";
+                        $ussdResponse = "END Your withdraw request has been received. A confirmation message has been sent to your phone.";
+                        $this->utility->sendWithdrawalRequestAlert($MSISDN);
 
-                    // Option 6: Static support prompt
                     } elseif ($lastInput === "6") {
-                        $ussdResponse = "END Dial +254790727272 for support.";
+                        $ussdResponse = "END Please call +254790727272 for dynamic customer support. Details have been texted to you.";
+                        $this->utility->sendCustomerCareAlert($MSISDN);
 
-                    // Fallback for unexpected inputs outside the structural 1-6 range
                     } else {
                         $ussdResponse = "CON Invalid choice.\n" . $this->renderMainMenu();
                     }
                     break;
 
-                // State: Individual Balance Check Execution
+                // State: Checking sub-balances across diverse structural database records
                 case "SelectBalanceAccount":
                     $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "00") {
                         $ussdResponse = $this->renderMainMenu();
                         $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
                     } else {
+                        // Map user input option strings into exact structural database wallet layout identifiers
+                        $targetTypeId = 0;
+                        if ($lastInput === "1") $targetTypeId = 1; // Main Account type references
+                        if ($lastInput === "2") $targetTypeId = 2; // Welfare Account type references
+                        if ($lastInput === "3") $targetTypeId = 4; // Loan Account type references
+
+                        // Extract aggregate ledger items array returned cleanly by the non-duplicated database join filters
                         $wallets = $this->utility->getMemberBalances($MSISDN);
-                        $selectedIndex = (int)$lastInput - 1; // Map human-readable input (1, 2) to 0-indexed array
-                        
-                        if (isset($wallets[$selectedIndex])) {
-                            $wallet = $wallets[$selectedIndex];
-                            $symbol = (strtolower($wallet['currency']) === 'ksh') ? 'KES' : 'Points';
-                            $formattedBal = number_format((float)$wallet['balance'], 2);
-                            $ussdResponse = "CON Your " . ucfirst($wallet['wallet_name']) . " balance is {$symbol} {$formattedBal}. \n00. Back";
+                        $selectedWallet = null;
+
+                        foreach ($wallets as $w) {
+                            if ((int)$w['wallet_type_id'] === $targetTypeId) {
+                                $selectedWallet = $w;
+                                break;
+                            }
+                        }
+
+                        if ($selectedWallet !== null) {
+                            $symbol = (strtolower($selectedWallet['currency']) === 'ksh') ? 'KES' : 'Pts';
+                            $formattedBal = number_format((float)$selectedWallet['balance'], 2);
+                            
+                            // Send full multiline balance text statement asynchronously via SMS API
+                            $this->utility->sendBalancesSms($MSISDN);
+
+                            // Provide secondary interactive shortcut action paths exclusively for the main cash wallet
+                            if ($targetTypeId === 1) {
+                                $ussdResponse = "CON Your Main Wallet balance is {$symbol} {$formattedBal}.\n"
+                                             . "1. Make Deposit\n"
+                                             . "00. Back";
+                                $this->utility->setTemplevel($SESSIONID, "MainWalletDirectAction");
+                            } else {
+                                $ussdResponse = "CON Your " . ucfirst($selectedWallet['wallet_name']) . " balance is {$symbol} {$formattedBal}.\n00. Back";
+                                $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
+                            }
                         } else {
-                            $ussdResponse = "END Selection failed.";
+                            $ussdResponse = "CON Account has no data records.\n00. Back";
+                            $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                         }
                     }
                     break;
 
-                // State: Selecting target account/wallet for deposit
-                case "DepositWalletSelect":
+                // State: Quick shortcuts nested directly inside the balance viewport menu options
+                case "MainWalletDirectAction":
+                    $this->utility->saveInput($lastInput, $SESSIONID);
+                    if ($lastInput === "00") {
+                        $ussdResponse = "CON Select Account to Check Balance:\n1. Main Wallet\n2. Welfare Wallet\n3. Loan Wallet\n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "SelectBalanceAccount");
+                    } elseif ($lastInput === "1") {
+                        $ussdResponse = "CON Enter Amount to Deposit to Main Wallet:\n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "MainWalletDepositCapture");
+                    } else {
+                        $ussdResponse = "CON Invalid option. Reply 00 to go back.";
+                    }
+                    break;
+
+                // State: Evaluating input numeric value for Main Wallet credits
+                case "MainWalletDepositCapture":
                     $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "00") {
                         $ussdResponse = $this->renderMainMenu();
                         $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
-                    } elseif ($lastInput === "1" || $lastInput === "2") {
-                        $targetName = ($lastInput === "1") ? "Main Wallet" : "Welfare Wallet";
-                        $ussdResponse = "CON Enter Amount to Deposit to {$targetName}: \n00. Back";
-                        $this->utility->setTemplevel($SESSIONID, "DepositAmountCapture");
                     } else {
-                        $ussdResponse = "END Option unavailable.";
-                    }
-                    break;
-
-                // State: Parsing input amounts and executing mock M-Pesa deposit crediting
-                case "DepositAmountCapture":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
-                    $amount = (float)$lastInput;
-                    if ($amount <= 0) {
-                        $ussdResponse = "END Deposit must be > 0.";
-                        break;
-                    }
-
-                    // Look backward into the history array to locate which wallet index was previously selected
-                    $targetWalletId = 1; 
-                    if (count($inputArray) >= 2) {
-                        $previousSelection = $inputArray[count($inputArray) - 2];
-                        if ($previousSelection === "2") {
-                            $targetWalletId = 2; 
+                        $amount = (float)$lastInput;
+                        if ($amount <= 0) {
+                            $ussdResponse = "END Deposit amount must be greater than 0.";
+                        } else {
+                            // Triggers automated credit operations, ledger mutations, and dynamic loyalty point points reward steps
+                            $this->utility->processSimulatedDeposit($MSISDN, 1, $amount);
+                            $ussdResponse = "CON KES " . number_format($amount, 2) . " credited to Main Wallet. \n00. Back";
+                            $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                         }
                     }
-
-                    $walletLabel = ($targetWalletId === 1) ? "Main Wallet" : "Welfare Wallet";
-                    $this->utility->processSimulatedDeposit($MSISDN, $targetWalletId, $amount);
-                    $ussdResponse = "CON KES " . number_format($amount, 2) . " credited to {$walletLabel}. \n00. Back";
                     break;
 
-                // State: Directing user to withdrawal logic paths or structural sweeps
-                case "WithdrawMenuSelect":
+                // State: Viewing options inside the secondary Welfare module
+                case "WelfareMenuSelect":
                     $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "00") {
                         $ussdResponse = $this->renderMainMenu();
                         $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
                     } elseif ($lastInput === "1") {
-                        $ussdResponse = "CON Enter Amount to Withdraw (Main Wallet):";
-                        $this->utility->setTemplevel($SESSIONID, "ProcessMainWithdrawal");
+                        $ussdResponse = "CON Enter Amount to Deposit to Welfare Wallet:\n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "WelfareDepositCapture");
                     } elseif ($lastInput === "2") {
-                        $ussdResponse = "CON Enter Welfare Contribution Amount:";
-                        $this->utility->setTemplevel($SESSIONID, "ProcessWelfareContribution");
+                        $ussdResponse = "CON Claim made successfully.\n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
+                    } elseif ($lastInput === "3") {
+                        $ussdResponse = "CON Welfare active.\n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
+                    } else {
+                        $ussdResponse = "CON Invalid choice.\n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                     }
                     break;
 
-                // State: Validating balances and processing standard cash payouts
-                case "ProcessMainWithdrawal":
+                // State: Processing input parameter figures targeting the Welfare funding account
+                case "WelfareDepositCapture":
                     $this->utility->saveInput($lastInput, $SESSIONID);
-                    $requestedAmount = (float)$lastInput;
-                    $wallets = $this->utility->getMemberBalances($MSISDN);
-                    
-                    $mainBalance = 0.0;
-                    foreach ($wallets as $w) { 
-                        if ((int)$w['wallet_type_id'] === 1) {
-                            $mainBalance = (float)$w['balance'];
+                    if ($lastInput === "00") {
+                        $ussdResponse = $this->renderMainMenu();
+                        $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
+                    } else {
+                        $amount = (float)$lastInput;
+                        if ($amount <= 0) {
+                            $ussdResponse = "END Deposit amount must be greater than 0.";
+                        } else {
+                            $this->utility->processSimulatedDeposit($MSISDN, 2, $amount);
+                            $ussdResponse = "CON KES " . number_format($amount, 2) . " credited to Welfare Wallet. \n00. Back";
+                            $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                         }
                     }
-
-                    // Check bounds constraints to prevent overdrafts or zero entries
-                    if ($requestedAmount > $mainBalance || $requestedAmount <= 0) {
-                        $ussdResponse = "END Insufficient funds.";
-                    } else {
-                        $newBalance = $mainBalance - $requestedAmount;
-                        // Deduct amount (indicated by negative sign) and append to auditing tables
-                        $this->utility->updateWalletBalance($MSISDN, 1, -$requestedAmount);
-                        $this->utility->logDemoTransaction($MSISDN, "Debit", $requestedAmount, $newBalance, "M-Pesa Payout Simulation");
-                        $ussdResponse = "END Payout Transferred!";
-                    }
                     break;
 
-                // State: Moving funds from Main Wallet (Type 1) to Welfare Wallet (Type 2)
-                case "ProcessWelfareContribution":
+                // State: Unified navigation landing pattern step to handle fallback options cleanly
+                case "GenericBackRoute":
                     $this->utility->saveInput($lastInput, $SESSIONID);
-                    $contributionAmount = (float)$lastInput;
-                    $wallets = $this->utility->getMemberBalances($MSISDN);
-                    
-                    $mainBalance = 0.0;
-                    $welfareBalance = 0.0;
-                    foreach ($wallets as $w) { 
-                        if ((int)$w['wallet_type_id'] === 1) $mainBalance = (float)$w['balance']; 
-                        if ((int)$w['wallet_type_id'] === 2) $welfareBalance = (float)$w['balance']; 
-                    }
-
-                    if ($contributionAmount > $mainBalance || $contributionAmount <= 0) {
-                        $ussdResponse = "END Insufficient funds.";
-                    } else {
-                        // Double-entry balancing: subtract from main wallet, add to welfare wallet
-                        $this->utility->updateWalletBalance($MSISDN, 1, -$contributionAmount);
-                        $this->utility->updateWalletBalance($MSISDN, 2, $contributionAmount);
-                        
-                        // Log tracking entries for both ends of the internal ledger movement
-                        $this->utility->logDemoTransaction($MSISDN, "Debit", $contributionAmount, ($mainBalance - $contributionAmount), "Welfare sweep");
-                        $this->utility->logDemoTransaction($MSISDN, "Credit", $contributionAmount, ($welfareBalance + $contributionAmount), "Welfare allocation");
-                        $ussdResponse = "END Contribution Cleared!";
-                    }
+                    $ussdResponse = $this->renderMainMenu();
+                    $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
                     break;
 
-                // State: Points system interaction summary
+                // State: Viewing active Chama parameters and point metrics
                 case "ChamaPointsHub":
                     $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "00") {
@@ -377,51 +332,61 @@ class UtilityController extends Controller
                         foreach ($wallets as $w) { 
                             if ((int)$w['wallet_type_id'] === 3) $points = (float)$w['balance']; 
                         }
-                        // Valuation conversion formula: 1 Point = 0.50 KES
+                        // Render standard monetary conversions (Rule structure: 1 Point = KES 0.50)
                         $cashValue = $points * 0.50;
                         $ussdResponse = "CON Balance: {$points} Points (KES " . number_format($cashValue, 2) . ") \n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                     } elseif ($lastInput === "2") {
                         $ussdResponse = "CON Enter Points to redeem: \n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "ExecutePointsRedemption");
                     }
                     break;
 
-                // State: Redeeming accumulated loyalty points directly into cash balances
+                // State: Validating boundaries and committing points-to-cash swap mutations
                 case "ExecutePointsRedemption":
                     $this->utility->saveInput($lastInput, $SESSIONID);
-                    $pointsToRedeem = floor((float)$lastInput); // Truncate partial points to enforce integer-like redemptions
-                    $wallets = $this->utility->getMemberBalances($MSISDN);
-                    
-                    $currentPoints = 0.0;
-                    $mainBalance = 0.0;
-                    foreach ($wallets as $w) { 
-                        if ((int)$w['wallet_type_id'] === 3) $currentPoints = (float)$w['balance']; 
-                        if ((int)$w['wallet_type_id'] === 1) $mainBalance = (float)$w['balance']; 
-                    }
-
-                    if ($pointsToRedeem > $currentPoints || $pointsToRedeem <= 0) {
-                        $ussdResponse = "END Redemption failed.";
+                    if ($lastInput === "00") {
+                        $ussdResponse = "CON Chama Points Hub:\n1. View Points Balance\n2. Redeem Points\n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "ChamaPointsHub");
                     } else {
-                        $cashValue = $pointsToRedeem * 0.50; // Convert points to KES monetary equivalent
+                        $pointsToRedeem = floor((float)$lastInput); 
+                        $wallets = $this->utility->getMemberBalances($MSISDN);
                         
-                        // Adjust point counts down and main cash wallets up
-                        $this->utility->updateWalletBalance($MSISDN, 3, -$pointsToRedeem);
-                        $this->utility->updateWalletBalance($MSISDN, 1, $cashValue);
-                        
-                        // Ledger entries for point reductions and equivalent cash deposits
-                        $this->utility->logDemoTransaction($MSISDN, "Debit", (float)$pointsToRedeem, ($currentPoints - $pointsToRedeem), "Points redemption");
-                        $this->utility->logDemoTransaction($MSISDN, "Credit", $cashValue, ($mainBalance + $cashValue), "Cash swap");
-                        $ussdResponse = "END Conversion Successful!";
+                        $currentPoints = 0.0;
+                        $mainBalance = 0.0;
+                        foreach ($wallets as $w) { 
+                            if ((int)$w['wallet_type_id'] === 3) $currentPoints = (float)$w['balance']; 
+                            if ((int)$w['wallet_type_id'] === 1) $mainBalance = (float)$w['balance']; 
+                        }
+
+                        // Protect financial ledger from over-draft mutations or invalid inputs
+                        if ($pointsToRedeem > $currentPoints || $pointsToRedeem <= 0) {
+                            $ussdResponse = "CON Redemption failed. Insufficient points balance.\n00. Back";
+                            $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
+                        } else {
+                            $cashValue = $pointsToRedeem * 0.50; 
+                            
+                            // Execute parallel adjustments: reduction of points wallet and incrementation of cash wallet
+                            $this->utility->updateWalletBalance($MSISDN, 3, -$pointsToRedeem);
+                            $this->utility->updateWalletBalance($MSISDN, 1, $cashValue);
+                            
+                            // Maintain systemic tracing balance logs within data transaction history indices
+                            $this->utility->logDemoTransaction($MSISDN, "Debit", (float)$pointsToRedeem, ($currentPoints - $pointsToRedeem), "Points redemption");
+                            $this->utility->logDemoTransaction($MSISDN, "Credit", $cashValue, ($mainBalance + $cashValue), "Cash swap");
+                            
+                            $ussdResponse = "CON Conversion Successful! Added KES " . number_format($cashValue, 2) . " to your Main Wallet.\n00. Back";
+                            $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
+                        }
                     }
                     break;
 
-                // Catch-all safety boundary for session expiration issues or anomalous inputs
+                // Fallback catch-all boundary block if a session unexpected exception trips
                 default:
                     $ussdResponse = "END Session timeout. Please retry.";
             }
         }
 
-        // Render plain text payload to the HTTP output response pipeline
+        // Render plain text payload data output to HTTP response stream pipeline
         $response->getBody()->write($ussdResponse);
         return $response->withHeader('Content-Type', 'text/plain');
     }

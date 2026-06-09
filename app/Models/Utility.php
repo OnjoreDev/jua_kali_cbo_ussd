@@ -6,10 +6,81 @@ namespace App\Models;
 
 use PDO;
 
+/**
+ * Utility Model Class
+ * Handles core business logic, database queries, SMS notifications via Celcom Africa,
+ * registration processes, and balance computations for the Jua Kali CBO platform.
+ */
 class Utility extends Model
 {
     /**
+     * Internal Celcom Africa SMS Delivery Engine
+     * * Assembles payload parameters and dispatches structural alert texts 
+     * to members using environmental credentials.
+     * * @param string $msisdn Destination phone number in international format (e.g., 254...)
+     * @param string $message The text content payload to transmit
+     * @return bool True if message successfully accepted by the gateway provider API
+     */
+    private function sendSMS(string $msisdn, string $message): bool
+    {
+        try {
+            // Retrieve gateway authentication configurations from environment variables
+            $partnerId = $_ENV['PARTNER_ID'] ?? '';
+            $apiKey    = $_ENV['API_KEY'] ?? '';
+            $senderId  = $_ENV['SENDER_ID'] ?? '';
+            $baseUrl   = $_ENV['URL'] ?? 'https://isms.celcomafrica.com/api/services/sendsms/';
+
+            // Terminate execution early if gateway environment properties are not fully set
+            if (empty($partnerId) || empty($apiKey) || empty($senderId)) {
+                $this->logger->error("SMS Dispatch canceled: Missing environmental configurations.");
+                return false;
+            }
+
+            // Urlencode payload message content safely to handle symbols, spaces, and linebreaks
+            $encodedMessage = urlencode($message);
+            
+            // Build absolute query request string structure for standard GET execution
+            $reqUrl = rtrim($baseUrl, '/') . '/?apikey=' . trim($apiKey) . '&partnerID=' . trim($partnerId) . '&shortcode=' . trim($senderId) . '&mobile=' . trim($msisdn) . '&message=' . $encodedMessage;
+
+            // Initialize a network session context using cURL
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $reqUrl);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true); // Intercept and return response as string
+            curl_setopt($ch, CURLOPT_TIMEOUT, 4);           // Maximum wait boundary constraint (seconds)
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Bypass local peer SSL lookup for speed compatibility
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+
+            // Execute the remote API call and fetch HTTP metadata status code
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            // Handle network transport Layer Failures
+            if ($response === false) {
+                $this->logger->error("SMS gateway network timeout for {$msisdn}");
+                return false;
+            }
+
+            // Check if gateway returned anything other than HTTP 200 Success status
+            if ($httpCode !== 200) {
+                $this->logger->warning("SMS gateway answered with unexpected HTTP Code {$httpCode} for {$msisdn}. Response: " . trim($response));
+                return false;
+            }
+
+            $this->logger->info("SMS dispatched successfully to {$msisdn}. Gateway response: " . trim($response));
+            return true;
+        } catch (\Exception $e) {
+            $this->logger->error("SMS execution exception encountered for {$msisdn}: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Check if the phone number exists in the members table
+     * * Used by the USSD entry routing checkpoint to branch users 
+     * to either Registration prompts or the Member Main Menu.
+     * * @param string $phoneNumber Normalized telephone string
+     * @return bool True if record entry exists
      */
     public function isMemberRegistered(string $phoneNumber): bool
     {
@@ -20,13 +91,21 @@ class Utility extends Model
     }
 
     /**
-     * Insert a newly registered user into the members table and auto-provision default wallets
+     * Insert registered user into members table and provision default wallets
+     * * Wraps user creation and ledger account allocation within a database transaction 
+     * to guarantee all default wallets are set up successfully or rolled back entirely on error.
+     * * @param string $fullName First and last name input from USSD
+     * @param string $phoneNumber User MSISDN
+     * @param string $vocation Job specialization text input
+     * @return bool True if completely processed and committed
      */
     public function registerNewMember(string $fullName, string $phoneNumber, string $vocation): bool
     {
         try {
+            // Initiate atomic ACID transaction layer
             $this->pdo->beginTransaction();
 
+            // 1. Insert profile records into core members table
             $sql = "INSERT INTO members (fullname, phone_number, vocation) VALUES (:fullname, :phone_number, :vocation)";
             $stmt = $this->pdo->prepare($sql);
             $result = $stmt->execute([
@@ -40,12 +119,14 @@ class Utility extends Model
                 return false;
             }
 
+            // Extract the autoincrement ID assigned to this newly created user row
             $memberId = (int)$this->pdo->lastInsertId();
 
-            // Auto-provision basic wallets dynamically based on available configuration rules
+            // 2. Query all existing account system wallet types (Main, Welfare, Chama Points, Loan)
             $typesStmt = $this->pdo->query("SELECT id FROM wallet_types");
             $types = $typesStmt->fetchAll(PDO::FETCH_COLUMN);
 
+            // 3. Loop through every distinct type to provision an initial wallet set at balance zero
             if (!empty($types)) {
                 $walletSql = "INSERT IGNORE INTO wallets (member_id, balance, wallet_type_id, created_at) VALUES (:member_id, 0, :wallet_type_id, NOW())";
                 $walletStmt = $this->pdo->prepare($walletSql);
@@ -57,11 +138,16 @@ class Utility extends Model
                 }
             }
 
+            // Commit changes to permanent database state storage
             $this->pdo->commit();
-            $this->logger->info("New member registered and wallets provisioned successfully: {$phoneNumber}");
-            return true;
 
+            // Fire an asynchronous onboarding welcome text message via the API
+            $welcomeMessage = "Welcome to Jua Kali CBO, {$fullName}! Your account has been set up successfully as a {$vocation}. Dial our code anytime to access services.";
+            $this->sendSMS($phoneNumber, $welcomeMessage);
+
+            return true;
         } catch (\Exception $e) {
+            // Fallback and drop partial query executions if database exception trips
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
@@ -71,25 +157,32 @@ class Utility extends Model
     }
 
     /**
-     * FETCH DYNAMIC BALANCE BALANCES: Pulls directly using relational mappings 
-     * Handles lazy wallet record initialization automatically if missing.
+     * Fetch all ledger account balances associated with the user
+     * * FIXED: Includes explicit MAX() aggregation and a structural GROUP BY statement on the unique 
+     * wallet type metrics. This acts as a database filter barrier, wiping out duplicated line 
+     * calculations caused by redundant join history.
+     * * @param string $phoneNumber Target lookup phone number
+     * @return array Matrix array containing rows of individual wallet types and balances
      */
     public function getMemberBalances(string $phoneNumber): array
     {
+        // Query grouping aggregates records precisely down to one unique output row per account option
         $sql = "SELECT 
                     wt.id as wallet_type_id,
                     wt.name as wallet_name,
                     wt.currency,
-                    w.balance
+                    MAX(w.balance) as balance
                 FROM wallets w
                 JOIN members m ON w.member_id = m.id
                 JOIN wallet_types wt ON w.wallet_type_id = wt.id
                 WHERE m.phone_number = :phone 
+                GROUP BY wt.id, wt.name, wt.currency
                 ORDER BY wt.id ASC";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute([':phone' => $phoneNumber]);
         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+        // Fail-safe provisioning backup logic if a member profile has zero active rows inside wallets table
         if (empty($results)) {
             $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
             $stmtMem->execute([':phone' => $phoneNumber]);
@@ -97,7 +190,6 @@ class Utility extends Model
 
             if ($member) {
                 $memberId = $member['id'];
-                
                 $typesStmt = $this->pdo->query("SELECT id FROM wallet_types");
                 $types = $typesStmt->fetchAll(PDO::FETCH_COLUMN);
 
@@ -111,6 +203,7 @@ class Utility extends Model
                         ]);
                     }
                     
+                    // Re-query cleanly to extract the clean, fixed dataset matrix
                     $stmt->execute([':phone' => $phoneNumber]);
                     $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 }
@@ -121,7 +214,33 @@ class Utility extends Model
     }
 
     /**
-     * ATOMIC LEDGER BALANCING: Directly modifies wallet balances for the member
+     * Send an explicit account balance summary SMS text
+     * * Pulls the clean, non-duplicated balance arrays and iterates through them 
+     * to formulate a singular multi-line balance text statement dispatched to the user.
+     * * @param string $phoneNumber Destination member handset phone string
+     */
+    public function sendBalancesSms(string $phoneNumber): void
+    {
+        $wallets = $this->getMemberBalances($phoneNumber);
+        if (empty($wallets)) return;
+
+        $msg = "Jua Kali CBO Account Balances:\n";
+        foreach ($wallets as $w) {
+            // Map the alphanumeric currency classifications down to explicit textual symbols
+            $symbol = (strtolower($w['currency']) === 'ksh') ? 'KES' : 'Pts';
+            $msg .= "- " . ucfirst($w['wallet_name']) . ": " . $symbol . " " . number_format((float)$w['balance'], 2) . "\n";
+        }
+
+        $this->sendSMS($phoneNumber, trim($msg));
+    }
+
+    /**
+     * Atomic Ledger Balance Mutation Updates
+     * * Mutates ledger accounts directly via increment or decrement mathematical injections.
+     * * @param string $phoneNumber Target account identifier phone key
+     * @param int $walletTypeId Target target ledger ID (e.g., 1=Main, 2=Welfare)
+     * @param float $amount Numeric monetary value shift (can accept negative floats for withdrawals)
+     * @return bool Statement status execution check
      */
     public function updateWalletBalance(string $phoneNumber, int $walletTypeId, float $amount): bool
     {
@@ -138,19 +257,26 @@ class Utility extends Model
     }
 
     /**
-     * TRANSACTION RECORD ENGINE: Appends records to the transaction history ledger
+     * Audit trail transaction record engine
+     * * Maintains a permanent audit history log of all financial interactions, deposits, 
+     * withdrawals, and point actions for internal auditing.
+     * * @param string $phoneNumber Processing profile telephone key
+     * @param string $type Classification identifier (e.g., Credit, Debit)
+     * @param float $amount Volume amount altered
+     * @param float $currentBalance Post-calculated snapshot value balance
+     * @param string $desc Detail memo explaining transactional cause
+     * @return bool Process confirmation status
      */
     public function logDemoTransaction(string $phoneNumber, string $type, float $amount, float $currentBalance, string $desc): bool
     {
         $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
         $stmtMem->execute([':phone' => $phoneNumber]);
         $member = $stmtMem->fetch(PDO::FETCH_ASSOC);
-        if (!$member) {
-            $this->logger->warning("Failed to log transaction. Member with phone {$phoneNumber} not found.");
-            return false;
-        }
+        if (!$member) return false;
 
         $memberId = $member['id'];
+        
+        // Generate a random unique pseudorandom payment voucher code reference format
         $receipt = "DEMO-" . strtoupper(bin2hex(random_bytes(4)));
 
         $sql = "INSERT INTO transactions (member_id, type, amount, balance, status, payment_receipt, description, created_at) 
@@ -168,16 +294,21 @@ class Utility extends Model
     }
 
     /**
-     * SIMULATED OVER-THE-AIR DEPOSIT STACK: Simulates successful M-Pesa interactions
+     * Simulated credit engine with dynamic Loyalty Reward Points Allocation
+     * * Simulates external payment gateway response completion (STK push).
+     * Modifies selected target wallet balances, triggers financial logging ledger 
+     * sequences, and assigns loyalty points calculations based on payment scale benchmarks.
+     * * @param string $phoneNumber Target user executing saving deposit step
+     * @param int $walletTypeId Designated target endpoint account
+     * @param float $amount Real-time value deposited
+     * @return bool Loop execution confirmation status
      */
     public function processSimulatedDeposit(string $phoneNumber, int $walletTypeId, float $amount): bool
     {
-        $this->logger->info("Processing simulated deposit for {$phoneNumber}, Amount: {$amount}");
-
-        // 1. Credit target wallet ledger balance atomically
+        // 1. Credit target wallet amount directly
         $this->updateWalletBalance($phoneNumber, $walletTypeId, $amount);
 
-        // 2. Fetch current balance configuration for auditing and logging records
+        // 2. Fetch updated balance state for transaction audit trail logs
         $balances = $this->getMemberBalances($phoneNumber);
         $newBalance = 0.0;
         foreach ($balances as $b) {
@@ -187,39 +318,81 @@ class Utility extends Model
         }
 
         $label = ($walletTypeId === 1) ? "main" : "welfare";
+        
+        // 3. Add explicit audit log record to standard database history ledger
         $this->logDemoTransaction($phoneNumber, "Credit", $amount, $newBalance, "Simulated M-Pesa STK Deposit to {$label} account");
 
-        // 3. Loyalty Reward Rule: Every KES 100 deposited into main or welfare earns 1 Point
+        // 4. Send background transactional confirmation text alert
+        $depositSms = "Confirmed! You have deposited KES " . number_format($amount, 2) . " into your " . ucfirst($label) . " Wallet. New Balance is KES " . number_format($newBalance, 2);
+        $this->sendSMS($phoneNumber, $depositSms);
+
+        // 5. Loyalty Engine Matrix rule execution: Award 1 Point for every KES 100 milestone deposited
         if ($amount >= 100 && ($walletTypeId === 1 || $walletTypeId === 2)) {
             $awardedPoints = floor($amount / 100);
+            
+            // Increment Chama Points Wallet (Type ID: 3)
             $this->updateWalletBalance($phoneNumber, 3, $awardedPoints);
 
-            // Recalculate dynamic points balance state for logging
+            // Re-fetch individual points configuration balance totals for audit trail snapshots
             $updatedBalances = $this->getMemberBalances($phoneNumber);
             $ptsBalance = 0.0;
             foreach ($updatedBalances as $b) {
-                if ((int)$b['wallet_type_id'] === 3) {
-                    $ptsBalance = (float)$b['balance'];
-                }
+                if ((int)$b['wallet_type_id'] === 3) $ptsBalance = (float)$b['balance'];
             }
+            
+            // Log point transaction to audit trail ledger
             $this->logDemoTransaction($phoneNumber, "Credit", $awardedPoints, $ptsBalance, "Loyalty Points earned from Deposit");
+
+            // Dispatch dynamic points alert text
+            $rewardSms = "You have earned {$awardedPoints} Chama Points from your deposit. Total loyalty balance: {$ptsBalance}.";
+            $this->sendSMS($phoneNumber, $rewardSms);
         }
 
         return true;
     }
 
     /**
-     * BIND PARAMETER FIXES FOR SECURITY LOGGING
+     * Dispatches immediate notification response for Menu Item 4 (Loan Requests)
+     */
+    public function sendLoanRequestAlert(string $phoneNumber): void
+    {
+        $msg = "Jua Kali CBO Alert: We have received your loan request. Our credit evaluation team will review your savings and wallet matrix and communicate via SMS within 24 hours.";
+        $this->sendSMS($phoneNumber, $msg);
+    }
+
+    /**
+     * Dispatches immediate notification response for Menu Item 5 (Withdrawal Requests)
+     */
+    public function sendWithdrawalRequestAlert(string $phoneNumber): void
+    {
+        $msg = "Jua Kali CBO Alert: Your withdrawal request has been received and added to our processing queue. Funds will be released via M-Pesa shortly.";
+        $this->sendSMS($phoneNumber, $msg);
+    }
+
+    /**
+     * Dispatches immediate notification response for Menu Item 6 (Customer Care Helpline information text)
+     * Updated phone contact output syntax to present clean internationalized strings uniformly.
+     */
+    public function sendCustomerCareAlert(string $phoneNumber): void
+    {
+        $msg = "Jua Kali CBO Support: For any questions or payment assistance, reach out directly to our dedicated customer support desk by calling +254790727272.";
+        $this->sendSMS($phoneNumber, $msg);
+    }
+
+    /**
+     * Tracks raw network multi-string inputs over lifetime session records
+     * Appends entries using a pipe separator (|) inside the database inbox table.
      */
     public function saveInput(string $input, string $sessionId)
     {
-        $insertSQL = "UPDATE ussd_inbox 
-                      SET message = CONCAT(IFNULL(message, ''), '|', :input) 
-                      WHERE session_id = :session_id LIMIT 1";
+        $insertSQL = "UPDATE ussd_inbox SET message = CONCAT(IFNULL(message, ''), '|', :input) WHERE session_id = :session_id LIMIT 1";
         $stmt = $this->pdo->prepare($insertSQL);
         $stmt->execute([':input' => $input, ':session_id' => $sessionId]);
     }
 
+    /**
+     * Sets state step anchor strings to preserve state tracking logic between raw USSD round-trips
+     */
     public function setTemplevel(string $sessionId, string $templevel)
     {
         $updateSQL = "UPDATE ussd_inbox SET temp_level = :templevel WHERE session_id = :session_id";
@@ -227,6 +400,9 @@ class Utility extends Model
         $stmt->execute([':templevel' => $templevel, ':session_id' => $sessionId]);
     }
 
+    /**
+     * Retrieves current active tracking position label assigned to the operating session reference
+     */
     public function getTemplevel(string $sessionId)
     {
         $selectSQL = "SELECT temp_level FROM ussd_inbox WHERE session_id = :session_id";
@@ -236,10 +412,12 @@ class Utility extends Model
         return $result ? $result[0] : null;
     }
 
+    /**
+     * Instantiates an active record log within the inbox framework when code initialization loops start
+     */
     public function createSession(string $sessionId, string $msisdn, string $ussdCode): bool
     {
-        $sql = "INSERT INTO ussd_inbox (session_id, msisdn, shortcode, temp_level, message) 
-                VALUES (:session_id, :msisdn, :shortcode, :temp_level, :message)";
+        $sql = "INSERT INTO ussd_inbox (session_id, msisdn, shortcode, temp_level, message) VALUES (:session_id, :msisdn, :shortcode, :temp_level, :message)";
         $stmt = $this->pdo->prepare($sql);
         return $stmt->execute([
             ':session_id' => $sessionId,
