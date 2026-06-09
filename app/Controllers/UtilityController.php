@@ -13,7 +13,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
  * UtilityController Class
  * Manages incoming HTTP telecommunication requests from the USSD Gateway.
  * Controls multi-step state menus, handles user interaction routing, and interfaces
- * directly with the Utility Model for transactional storage and data retrieval.
+ * directly with the Utility Model with explicit form and data validation rules.
  */
 class UtilityController extends Controller
 {
@@ -25,7 +25,7 @@ class UtilityController extends Controller
     /**
      * Dependency Injection Constructor
      * Inherits the logging infrastructure from the base controller and resolves the model layer.
-     * * @param ContainerInterface $container PSR-11 Dependency Injection Container
+     * @param ContainerInterface $container PSR-11 Dependency Injection Container
      */
     public function __construct(ContainerInterface $container)
     {
@@ -36,7 +36,7 @@ class UtilityController extends Controller
     /**
      * Normalizes Kenyan MSISDN inputs to an absolute internationalized format.
      * Converts phone strings starting with local prefixes '07' or '01' to '254...'.
-     * * @param string $phone Raw phone string parameter from the request
+     * @param string $phone Raw phone string parameter from the request
      * @return string Normalized country code standard phone number
      */
     private function normalizePhoneNumber(string $phone): string
@@ -49,9 +49,36 @@ class UtilityController extends Controller
     }
 
     /**
+     * Helper to validate that an input contains a valid first and last name.
+     * Requirements: 3-50 chars total, alphabetic characters and spaces only, minimum 2 distinct words.
+     */
+    private function isValidFullName(string $name): bool
+    {
+        $name = preg_replace('/\s+/', ' ', trim($name)); // Normalize internal white spaces
+        if (strlen($name) < 3 || strlen($name) > 50) {
+            return false;
+        }
+        // Letters and spaces only, split check ensures at least two name parts are supplied
+        if (!preg_match("/^[a-zA-Z\s]+$/", $name) || count(explode(' ', $name)) < 2) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Helper to validate vocation fields.
+     * Requirements: 3-30 chars total, alphabetic characters, dashes, and single spaces only.
+     */
+    private function isValidVocation(string $vocation): bool
+    {
+        $vocation = trim($vocation);
+        return (bool) preg_match("/^[a-zA-Z\s\-]{3,30}$/", $vocation);
+    }
+
+    /**
      * Renders the root menu options presented to successfully registered CBO members.
      * Preceded by the 'CON' flag to signal the telecom gateway that the session is ongoing.
-     * * @return string Multi-line string showing available service operations
+     * @return string Multi-line string showing available service operations
      */
     private function renderMainMenu(): string
     {
@@ -80,7 +107,7 @@ class UtilityController extends Controller
 
         // Parse continuous asterisk-concatenated inputs (e.g., "1*2*100") into an accessible traversal map
         $inputArray = ($INPUT === "") ? [] : explode("*", $INPUT); 
-        $lastInput = end($inputArray); // Capture the isolated current user choice response
+        $lastInput = trim(end($inputArray)); // Capture the isolated current user choice response
         $ussdResponse = "";
 
         // Log the structural raw parameters for telemetry verification and auditing
@@ -89,6 +116,12 @@ class UtilityController extends Controller
             'msisdn' => $MSISDN,
             'input' => $INPUT
         ]);
+
+        // Input Integrity Guard: Protect application core against critical parameter loss
+        if (empty($SESSIONID) || empty($MSISDN)) {
+            $response->getBody()->write("END System connection error. Session identifiers missing.");
+            return $response->withHeader('Content-Type', 'text/plain');
+        }
 
         // Check if this is a fresh session initialization, a back navigation request ('00'), or a main menu shortcut ('39')
         if ($INPUT === "" || $lastInput === "39" || $lastInput === "00") {
@@ -118,48 +151,57 @@ class UtilityController extends Controller
                 
                 // State: Checking if the user consented to begin profiling
                 case "PromptRegistration":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "1") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "CON Please enter your Full Name:";
                         $this->utility->setTemplevel($SESSIONID, "CaptureName");
                     } else {
-                        // END prefix instantly breaks the network handset call connection loop
-                        $ussdResponse = "END Registration cancelled.";
+                        // Form Validation: User input an option other than "1" to proceed with signup
+                        $ussdResponse = "END Registration cancelled. You must press 1 to register.";
                     }
                     break;
 
-                // State: Capturing the text name input string
+                // State: Capturing and validating the text name input string
                 case "CaptureName":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
-                    $ussdResponse = "CON Please enter your Vocation (e.g., Carpenter, Tailor):";
-                    $this->utility->setTemplevel($SESSIONID, "CaptureVocation");
+                    if (!$this->isValidFullName($lastInput)) {
+                        // Form Validation: Input failed string layout guidelines. State layer is NOT advanced.
+                        $ussdResponse = "CON [Invalid Name! Enter First & Last Name, letters only]\n\nPlease enter your Full Name:";
+                    } else {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
+                        $ussdResponse = "CON Please enter your Vocation (e.g., Carpenter, Tailor):";
+                        $this->utility->setTemplevel($SESSIONID, "CaptureVocation");
+                    }
                     break;
 
                 // State: Finalizing registration and writing profile metrics to database
                 case "CaptureVocation":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
-                    
-                    $totalElements = count($inputArray);
-                    $vocation = $lastInput;
-                    
-                    // Traverse backwards safely within the array to fetch the previously submitted name component
-                    $fullName = $inputArray[$totalElements - 2] ?? 'Unknown';
-                    
-                    // Commit to storage layer and dispatch transactional onboarding text via Celcom Africa
-                    $isRegistered = $this->utility->registerNewMember($fullName, $MSISDN, $vocation);
-                    
-                    if ($isRegistered) {
-                        $ussdResponse = "END Thank you for registering, {$fullName}.\nPlease redial the code to view your menu.";
+                    if (!$this->isValidVocation($lastInput)) {
+                        // Form Validation: Vocation failed length or naming boundaries. State remains.
+                        $ussdResponse = "CON [Invalid Vocation! Use letters/dashes only, 3-30 chars]\n\nPlease enter your Vocation:";
                     } else {
-                        $ussdResponse = "END System error during registration. Please try again later.";
+                        $this->utility->saveInput($lastInput, $SESSIONID);
+                        
+                        $totalElements = count($inputArray);
+                        $vocation = $lastInput;
+                        
+                        // Traverse backwards safely within the array to fetch the previously verified name component
+                        $fullName = $inputArray[$totalElements - 2] ?? 'Unknown Member';
+                        
+                        // Commit to storage layer and dispatch transactional onboarding text via Celcom Africa
+                        $isRegistered = $this->utility->registerNewMember($fullName, $MSISDN, $vocation);
+                        
+                        if ($isRegistered) {
+                            $ussdResponse = "END Thank you for registering, {$fullName}.\nPlease redial the code to view your menu.";
+                        } else {
+                            $ussdResponse = "END System error during registration. Please try again later.";
+                        }
                     }
                     break;
 
                 // State: Routing root menu options chosen by standard members
                 case "MemberMainMenu":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
-
                     if ($lastInput === "1") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "CON Select Account to Check Balance:\n"
                                      . "1. Main Wallet\n"
                                      . "2. Welfare Wallet\n"
@@ -168,43 +210,71 @@ class UtilityController extends Controller
                         $this->utility->setTemplevel($SESSIONID, "SelectBalanceAccount");
 
                     } elseif ($lastInput === "2") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "CON Welfare Hub:\n1. Deposit\n2. Claim\n3. Status\n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "WelfareMenuSelect");
 
                     } elseif ($lastInput === "3") {
-                        $ussdResponse = "CON Chama Points Hub:\n1. View Points Balance\n2. Redeem Points\n00. Back";
-                        $this->utility->setTemplevel($SESSIONID, "ChamaPointsHub");
+                        $this->utility->saveInput($lastInput, $SESSIONID);
+                        
+                        // Intercept step: check points balance before rendering the sub-menu layout options
+                        $wallets = $this->utility->getMemberBalances($MSISDN);
+                        $points = 0.0;
+                        foreach ($wallets as $w) { 
+                            if ((int)$w['wallet_type_id'] === 3) {
+                                $points = (float)$w['balance']; 
+                            }
+                        }
+
+                        if ($points <= 0) {
+                            // Guard Condition: Reject traversal when active balances do not exist
+                            $ussdResponse = "CON You have 0 Chama Points. You cannot access the redemption menu.\n00. Back";
+                            $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
+                        } else {
+                            // Standard operational path when positive points exist
+                            $ussdResponse = "CON Chama Points Hub:\n1. View Points Balance\n2. Redeem Points\n00. Back";
+                            $this->utility->setTemplevel($SESSIONID, "ChamaPointsHub");
+                        }
 
                     } elseif ($lastInput === "4") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "END Your loan request has been received. A confirmation message has been sent to your phone.";
-                        // Async alerts trigger direct SMS workflows then exit session connection immediately
                         $this->utility->sendLoanRequestAlert($MSISDN);
 
                     } elseif ($lastInput === "5") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "END Your withdraw request has been received. A confirmation message has been sent to your phone.";
                         $this->utility->sendWithdrawalRequestAlert($MSISDN);
 
                     } elseif ($lastInput === "6") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "END Please call +254790727272 for dynamic customer support. Details have been texted to you.";
                         $this->utility->sendCustomerCareAlert($MSISDN);
 
                     } else {
-                        $ussdResponse = "CON Invalid choice.\n" . $this->renderMainMenu();
+                        // Form Validation: Choice fell out of bound menu options (1-6)
+                        $ussdResponse = "CON [Invalid Choice!]\n" . $this->renderMainMenu();
                     }
                     break;
 
                 // State: Checking sub-balances across diverse structural database records
                 case "SelectBalanceAccount":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "00") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = $this->renderMainMenu();
                         $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
+                    } elseif (!in_array($lastInput, ["1", "2", "3"], true)) {
+                        // Form Validation: User selected an option out of structural keypad options
+                        $ussdResponse = "CON [Invalid Selection! Choose 1, 2, or 3]\n\n"
+                                     . "Select Account to Check Balance:\n"
+                                     . "1. Main Wallet\n"
+                                     . "2. Welfare Wallet\n"
+                                     . "3. Loan Wallet\n"
+                                     . "00. Back";
                     } else {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         // Map user input option strings into exact structural database wallet layout identifiers
-                        $targetTypeId = 0;
-                        if ($lastInput === "1") $targetTypeId = 1; // Main Account type references
-                        if ($lastInput === "2") $targetTypeId = 2; // Welfare Account type references
-                        if ($lastInput === "3") $targetTypeId = 4; // Loan Account type references
+                        $targetTypeId = ($lastInput === "1") ? 1 : (($lastInput === "2") ? 2 : 4);
 
                         // Extract aggregate ledger items array returned cleanly by the non-duplicated database join filters
                         $wallets = $this->utility->getMemberBalances($MSISDN);
@@ -243,73 +313,79 @@ class UtilityController extends Controller
 
                 // State: Quick shortcuts nested directly inside the balance viewport menu options
                 case "MainWalletDirectAction":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "00") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "CON Select Account to Check Balance:\n1. Main Wallet\n2. Welfare Wallet\n3. Loan Wallet\n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "SelectBalanceAccount");
                     } elseif ($lastInput === "1") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "CON Enter Amount to Deposit to Main Wallet:\n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "MainWalletDepositCapture");
                     } else {
-                        $ussdResponse = "CON Invalid option. Reply 00 to go back.";
+                        // Form Validation: Catch unauthorized options on main action shortcut
+                        $ussdResponse = "CON [Invalid Input!]\n\nReply 1 to Deposit or 00 to go back.";
                     }
                     break;
 
                 // State: Evaluating input numeric value for Main Wallet credits
                 case "MainWalletDepositCapture":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "00") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = $this->renderMainMenu();
                         $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
+                    } elseif (!is_numeric($lastInput) || (float)$lastInput <= 0 || (float)$lastInput > 70000) {
+                        // Form Validation: Ensure valid numeric formats between KES 1 and 70,000 max single limit
+                        $ussdResponse = "CON [Invalid Amount! Enter a numeric value between 1 and 70,000]\n\nEnter Amount to Deposit:";
                     } else {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $amount = (float)$lastInput;
-                        if ($amount <= 0) {
-                            $ussdResponse = "END Deposit amount must be greater than 0.";
-                        } else {
-                            // Triggers automated credit operations, ledger mutations, and dynamic loyalty point points reward steps
-                            $this->utility->processSimulatedDeposit($MSISDN, 1, $amount);
-                            $ussdResponse = "CON KES " . number_format($amount, 2) . " credited to Main Wallet. \n00. Back";
-                            $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
-                        }
+                        
+                        // Triggers automated credit operations, ledger mutations, and dynamic loyalty point reward steps
+                        $this->utility->processSimulatedDeposit($MSISDN, 1, $amount);
+                        $ussdResponse = "CON KES " . number_format($amount, 2) . " credited to Main Wallet. \n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                     }
                     break;
 
                 // State: Viewing options inside the secondary Welfare module
                 case "WelfareMenuSelect":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "00") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = $this->renderMainMenu();
                         $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
                     } elseif ($lastInput === "1") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "CON Enter Amount to Deposit to Welfare Wallet:\n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "WelfareDepositCapture");
                     } elseif ($lastInput === "2") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "CON Claim made successfully.\n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                     } elseif ($lastInput === "3") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "CON Welfare active.\n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                     } else {
-                        $ussdResponse = "CON Invalid choice.\n00. Back";
-                        $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
+                        // Form Validation: Wrap around invalid menu indexing
+                        $ussdResponse = "CON [Invalid Choice!]\n\nWelfare Hub:\n1. Deposit\n2. Claim\n3. Status\n00. Back";
                     }
                     break;
 
                 // State: Processing input parameter figures targeting the Welfare funding account
                 case "WelfareDepositCapture":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "00") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = $this->renderMainMenu();
                         $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
+                    } elseif (!is_numeric($lastInput) || (float)$lastInput <= 0 || (float)$lastInput > 70000) {
+                        // Form Validation: Enforce clean numerical ranges inside Welfare funding state
+                        $ussdResponse = "CON [Invalid Amount! Enter a value between 1 and 70,000]\n\nEnter Amount to Deposit:";
                     } else {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $amount = (float)$lastInput;
-                        if ($amount <= 0) {
-                            $ussdResponse = "END Deposit amount must be greater than 0.";
-                        } else {
-                            $this->utility->processSimulatedDeposit($MSISDN, 2, $amount);
-                            $ussdResponse = "CON KES " . number_format($amount, 2) . " credited to Welfare Wallet. \n00. Back";
-                            $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
-                        }
+                        $this->utility->processSimulatedDeposit($MSISDN, 2, $amount);
+                        $ussdResponse = "CON KES " . number_format($amount, 2) . " credited to Welfare Wallet. \n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                     }
                     break;
 
@@ -322,33 +398,42 @@ class UtilityController extends Controller
 
                 // State: Viewing active Chama parameters and point metrics
                 case "ChamaPointsHub":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "00") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = $this->renderMainMenu();
                         $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
                     } elseif ($lastInput === "1") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $wallets = $this->utility->getMemberBalances($MSISDN);
                         $points = 0.0;
                         foreach ($wallets as $w) { 
                             if ((int)$w['wallet_type_id'] === 3) $points = (float)$w['balance']; 
                         }
-                        // Render standard monetary conversions (Rule structure: 1 Point = KES 0.50)
-                        $cashValue = $points * 0.50;
+                        // Render standard monetary conversions (Rule structure: 1 Point = KES 100)
+                        $cashValue = $points * 100 ;
                         $ussdResponse = "CON Balance: {$points} Points (KES " . number_format($cashValue, 2) . ") \n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                     } elseif ($lastInput === "2") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "CON Enter Points to redeem: \n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "ExecutePointsRedemption");
+                    } else {
+                        // Form Validation: Handle out of boundary inputs on the Chama Hub branch
+                        $ussdResponse = "CON [Invalid Option!]\n\nChama Points Hub:\n1. View Points Balance\n2. Redeem Points\n00. Back";
                     }
                     break;
 
                 // State: Validating boundaries and committing points-to-cash swap mutations
                 case "ExecutePointsRedemption":
-                    $this->utility->saveInput($lastInput, $SESSIONID);
                     if ($lastInput === "00") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "CON Chama Points Hub:\n1. View Points Balance\n2. Redeem Points\n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "ChamaPointsHub");
+                    } elseif (!is_numeric($lastInput) || (float)$lastInput <= 0) {
+                        // Form Validation: Ensure number inputs are strictly numerical elements
+                        $ussdResponse = "CON [Invalid Input! Please specify a positive number of points]\n\nEnter Points to redeem:";
                     } else {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
                         $pointsToRedeem = floor((float)$lastInput); 
                         $wallets = $this->utility->getMemberBalances($MSISDN);
                         
@@ -359,10 +444,9 @@ class UtilityController extends Controller
                             if ((int)$w['wallet_type_id'] === 1) $mainBalance = (float)$w['balance']; 
                         }
 
-                        // Protect financial ledger from over-draft mutations or invalid inputs
-                        if ($pointsToRedeem > $currentPoints || $pointsToRedeem <= 0) {
-                            $ussdResponse = "CON Redemption failed. Insufficient points balance.\n00. Back";
-                            $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
+                        // Form & Core Business Validation: Protect financial ledger from over-draft mutations or invalid inputs
+                        if ($pointsToRedeem > $currentPoints) {
+                            $ussdResponse = "CON [Redemption failed! You  have {$currentPoints} points]\n\n 00 Go back:";
                         } else {
                             $cashValue = $pointsToRedeem * 0.50; 
                             
