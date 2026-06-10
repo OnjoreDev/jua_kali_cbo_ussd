@@ -49,7 +49,7 @@ class UtilityController extends Controller
      */
     private function isValidFullName(string $name): bool
     {
-        $name = preg_replace('/\s+/', ' ', trim($name)); 
+        $name = preg_replace('/\s+/', ' ', trim($name));
         if (strlen($name) < 3 || strlen($name) > 50) {
             return false;
         }
@@ -74,12 +74,12 @@ class UtilityController extends Controller
     private function renderMainMenu(): string
     {
         return "CON Welcome to Jua Kali CBO. Select an option:\n"
-             . "1. Check Balance\n"
-             . "2. Welfare\n"
-             . "3. Chama Points\n"
-             . "4. Loan Request\n"
-             . "5. Withdraw Request\n"
-             . "6. Customer Care";
+            . "1. Check Balance\n"
+            . "2. Welfare\n"
+            . "3. Chama Points\n"
+            . "4. Loan Request\n"
+            . "5. Withdraw Request\n"
+            . "6. Customer Care";
     }
 
     /**
@@ -88,14 +88,14 @@ class UtilityController extends Controller
     public function __invoke(Request $request, Response $response): Response
     {
         $queryParams = $request->getQueryParams();
-        
+
         $SESSIONID = $queryParams["SESSIONID"] ?? '';
         $USSDCODE = rawurldecode($queryParams["USSDCODE"] ?? '');
         $MSISDN = $this->normalizePhoneNumber($queryParams["MSISDN"] ?? '');
         $INPUT = rawurldecode($queryParams["INPUT"] ?? '');
 
-        $inputArray = ($INPUT === "") ? [] : explode("*", $INPUT); 
-        $lastInput = trim(end($inputArray)); 
+        $inputArray = ($INPUT === "") ? [] : explode("*", $INPUT);
+        $lastInput = trim(end($inputArray));
         $ussdResponse = "";
 
         $this->logger->info("USSD Request", [
@@ -155,7 +155,7 @@ class UtilityController extends Controller
                         $totalElements = count($inputArray);
                         $vocation = $lastInput;
                         $fullName = $inputArray[$totalElements - 2] ?? 'Unknown Member';
-                        
+
                         $isRegistered = $this->utility->registerNewMember($fullName, $MSISDN, $vocation);
                         if ($isRegistered) {
                             $ussdResponse = "END Thank you for registering, {$fullName}.\nPlease redial the code to view your menu.";
@@ -178,8 +178,8 @@ class UtilityController extends Controller
                         $this->utility->saveInput($lastInput, $SESSIONID);
                         $wallets = $this->utility->getMemberBalances($MSISDN);
                         $points = 0.0;
-                        foreach ($wallets as $w) { 
-                            if ((int)$w['wallet_type_id'] === 3) $points = (float)$w['balance']; 
+                        foreach ($wallets as $w) {
+                            if ((int)$w['wallet_type_id'] === 3) $points = (float)$w['balance'];
                         }
 
                         if ($points <= 0) {
@@ -195,8 +195,8 @@ class UtilityController extends Controller
                         $this->utility->setTemplevel($SESSIONID, "CaptureLoanAmount");
                     } elseif ($lastInput === "5") {
                         $this->utility->saveInput($lastInput, $SESSIONID);
-                        $ussdResponse = "END Your withdraw request has been received. A confirmation message has been sent to your phone.";
-                        $this->utility->sendWithdrawalRequestAlert($MSISDN);
+                        $ussdResponse = "CON Enter Amount to Withdraw from Main Wallet:\n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "CaptureWithdrawalAmount");
                     } elseif ($lastInput === "6") {
                         $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = "END Please call +254790727272 for dynamic customer support. Details have been texted to you.";
@@ -289,8 +289,8 @@ class UtilityController extends Controller
                         $this->utility->saveInput($lastInput, $SESSIONID);
                         $amount = (float)$lastInput;
                         $this->utility->processSimulatedDeposit($MSISDN, 1, $amount);
-                        $ussdResponse = "CON KES " . number_format($amount, 2) . " credited to Main Wallet. \n00. Back";
-                        $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
+                        $ussdResponse = "END KES " . number_format($amount, 2) . " credited to Main Wallet.";
+                        $this->utility->setTemplevel($SESSIONID, "MemberMainMenu"); // optional cleanup
                     }
                     break;
 
@@ -309,24 +309,24 @@ class UtilityController extends Controller
                         $this->utility->setTemplevel($SESSIONID, "WelfareClaimTypeSelect");
                     } elseif ($lastInput === "3") {
                         $this->utility->saveInput($lastInput, $SESSIONID);
-                        
+
                         $claims = $this->utility->getWelfareClaimsList($MSISDN);
                         $wallets = $this->utility->getMemberBalances($MSISDN);
-                        
+
                         $welfareBal = 0.0;
                         foreach ($wallets as $w) {
                             if ((int)$w['wallet_type_id'] === 2) $welfareBal = (float)$w['balance'];
                         }
 
                         $ussdResponse = "CON Welfare Hub Standing:\n"
-                                     . "Fund Balance: KES " . number_format($welfareBal, 2) . "\n\n"
-                                     . "Recent Claims:\n";
+                            . "Fund Balance: KES " . number_format($welfareBal, 2) . "\n\n"
+                            . "Recent Claims:\n";
 
                         if (empty($claims)) {
                             $ussdResponse .= "No logged claims found.\n";
                         } else {
                             foreach ($claims as $c) {
-                                $statusLabel = match($c['status']) {
+                                $statusLabel = match ($c['status']) {
                                     'pending_docs' => 'Pending Docs',
                                     'reviewing'    => 'In Review',
                                     'approved'     => 'Approved',
@@ -352,7 +352,7 @@ class UtilityController extends Controller
                     } elseif ($lastInput === "1" || $lastInput === "2") {
                         $this->utility->saveInput($lastInput, $SESSIONID);
                         $claimType = ($lastInput === "1") ? "medical" : "bereavement";
-                        
+
                         $isClaimed = $this->utility->createWelfareClaim($MSISDN, $claimType);
                         if ($isClaimed) {
                             $ussdResponse = "CON Claim submitted successfully. Tracking confirmation sent via SMS.\n00. Back";
@@ -376,8 +376,8 @@ class UtilityController extends Controller
                         $this->utility->saveInput($lastInput, $SESSIONID);
                         $amount = (float)$lastInput;
                         $this->utility->processSimulatedDeposit($MSISDN, 2, $amount);
-                        $ussdResponse = "CON KES " . number_format($amount, 2) . " credited to Welfare Wallet. \n00. Back";
-                        $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
+                        $ussdResponse = "END KES " . number_format($amount, 2) . " credited to Welfare Wallet.";
+                        $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
                     }
                     break;
 
@@ -396,10 +396,10 @@ class UtilityController extends Controller
                         $this->utility->saveInput($lastInput, $SESSIONID);
                         $wallets = $this->utility->getMemberBalances($MSISDN);
                         $points = 0.0;
-                        foreach ($wallets as $w) { 
-                            if ((int)$w['wallet_type_id'] === 3) $points = (float)$w['balance']; 
+                        foreach ($wallets as $w) {
+                            if ((int)$w['wallet_type_id'] === 3) $points = (float)$w['balance'];
                         }
-                        $cashValue = $points * 100 ;
+                        $cashValue = $points * 100;
                         $ussdResponse = "CON Balance: {$points} Points (KES " . number_format($cashValue, 2) . ") \n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                     } elseif ($lastInput === "2") {
@@ -420,33 +420,73 @@ class UtilityController extends Controller
                         $ussdResponse = "CON [Invalid Input! Please specify a positive number of points]\n\nEnter Points to redeem:";
                     } else {
                         $this->utility->saveInput($lastInput, $SESSIONID);
-                        $pointsToRedeem = floor((float)$lastInput); 
+                        $pointsToRedeem = floor((float)$lastInput);
                         $wallets = $this->utility->getMemberBalances($MSISDN);
-                        
+
                         $currentPoints = 0.0;
                         $mainBalance = 0.0;
-                        foreach ($wallets as $w) { 
-                            if ((int)$w['wallet_type_id'] === 3) $currentPoints = (float)$w['balance']; 
-                            if ((int)$w['wallet_type_id'] === 1) $mainBalance = (float)$w['balance']; 
+                        foreach ($wallets as $w) {
+                            if ((int)$w['wallet_type_id'] === 3) $currentPoints = (float)$w['balance'];
+                            if ((int)$w['wallet_type_id'] === 1) $mainBalance = (float)$w['balance'];
                         }
 
                         if ($pointsToRedeem > $currentPoints) {
                             $ussdResponse = "CON [Redemption failed! You have {$currentPoints} points]\n\n00. Go back";
                         } else {
-                            $cashValue = $pointsToRedeem * 0.50; 
-                            
+                            $cashValue = $pointsToRedeem * 100;
+
                             $this->utility->updateWalletBalance($MSISDN, 3, -$pointsToRedeem);
                             $this->utility->updateWalletBalance($MSISDN, 1, $cashValue);
-                            
+
                             $this->utility->logDemoTransaction($MSISDN, "Debit", (float)$pointsToRedeem, ($currentPoints - $pointsToRedeem), "Points redemption");
                             $this->utility->logDemoTransaction($MSISDN, "Credit", $cashValue, ($mainBalance + $cashValue), "Cash swap");
-                            
+
                             $ussdResponse = "CON Conversion Successful! Added KES " . number_format($cashValue, 2) . " to your Main Wallet.\n00. Back";
                             $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                         }
                     }
                     break;
 
+                case "CaptureWithdrawalAmount":
+                    if ($lastInput === "00") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
+                        $ussdResponse = $this->renderMainMenu();
+                        $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
+                    } elseif (!is_numeric($lastInput) || (float)$lastInput <= 0 || (float)$lastInput > 70000) {
+                        $ussdResponse = "CON [Invalid Amount! Enter a value between 1 and 70,000]\n\nEnter Amount to Withdraw:";
+                    } else {
+                        $amount = (float)$lastInput;
+
+                        // 1. Fetch current balances to validate right here in the controller
+                        $wallets = $this->utility->getMemberBalances($MSISDN);
+                        $mainBalance = 0.0;
+                        foreach ($wallets as $w) {
+                            if ((int)$w['wallet_type_id'] === 1) {
+                                $mainBalance = (float)$w['balance'];
+                            }
+                        }
+
+                        // 2. STAGE VALIDATION: Check if withdrawal amount exceeds current main wallet balance
+                        if ($amount > $mainBalance) {
+                            $formattedBal = number_format($mainBalance, 2);
+                            $ussdResponse = "CON [Insufficient Balance!]\n"
+                                . "Your Main Wallet has KES {$formattedBal}.\n"
+                                . "Please enter a lesser amount:\n"
+                                . "00. Back";
+                            // Keep their state level at CaptureWithdrawalAmount so they can try a smaller amount
+                        } else {
+                            // 3. Balance is sufficient, proceed with logging the request safely
+                            $this->utility->saveInput($lastInput, $SESSIONID);
+                            $isProcessed = $this->utility->processWithdrawal($MSISDN, $amount);
+
+                            if ($isProcessed) {
+                                $ussdResponse = "END Withdrawal request of KES " . number_format($amount, 2) . " has been received.\nFunds will be sent via M-Pesa shortly.";
+                            } else {
+                                $ussdResponse = "END System error processing your withdrawal. Please try again later.";
+                            }
+                        }
+                    }
+                    break;
                 default:
                     $ussdResponse = "END Session timeout. Please retry.";
             }

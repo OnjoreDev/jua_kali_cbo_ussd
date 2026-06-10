@@ -25,10 +25,10 @@ class Utility extends Model
     {
         try {
             // Retrieve gateway authentication configurations from environment variables
-            $partnerId = $_ENV['PARTNER_ID'] ?? '';
-            $apiKey    = $_ENV['API_KEY'] ?? '';
-            $senderId  = $_ENV['SENDER_ID'] ?? '';
-            $baseUrl   = $_ENV['URL'] ?? 'https://isms.celcomafrica.com/api/services/sendsms/';
+            $partnerId = trim($_ENV['PARTNER_ID'] ?? '');
+            $apiKey    = trim($_ENV['API_KEY'] ?? '');
+            $senderId  = trim($_ENV['SENDER_ID'] ?? '');
+            $baseUrl   = trim($_ENV['URL'] ?? 'https://isms.celcomafrica.com/api/services/sendsms/');
 
             // Terminate execution early if gateway environment properties are not fully set
             if (empty($partnerId) || empty($apiKey) || empty($senderId)) {
@@ -38,7 +38,7 @@ class Utility extends Model
 
             // Urlencode payload message content safely to handle symbols, spaces, and linebreaks
             $encodedMessage = urlencode($message);
-            
+
             // Build absolute query request string structure for standard GET execution
             $reqUrl = rtrim($baseUrl, '/') . '/?apikey=' . trim($apiKey) . '&partnerID=' . trim($partnerId) . '&shortcode=' . trim($senderId) . '&mobile=' . trim($msisdn) . '&message=' . $encodedMessage;
 
@@ -202,7 +202,7 @@ class Utility extends Model
                             ':wallet_type_id' => $typeId
                         ]);
                     }
-                    
+
                     // Re-query cleanly to extract the clean, fixed dataset matrix
                     $stmt->execute([':phone' => $phoneNumber]);
                     $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -275,7 +275,7 @@ class Utility extends Model
         if (!$member) return false;
 
         $memberId = $member['id'];
-        
+
         // Generate a random unique pseudorandom payment voucher code reference format
         $receipt = "DEMO-" . strtoupper(bin2hex(random_bytes(4)));
 
@@ -318,7 +318,7 @@ class Utility extends Model
         }
 
         $label = ($walletTypeId === 1) ? "main" : "welfare";
-        
+
         // 3. Add explicit audit log record to standard database history ledger
         $this->logDemoTransaction($phoneNumber, "Credit", $amount, $newBalance, "Simulated M-Pesa STK Deposit to {$label} account");
 
@@ -329,7 +329,7 @@ class Utility extends Model
         // 5. Loyalty Engine Matrix rule execution: Award 1 Point for every KES 100 milestone deposited
         if ($amount >= 100 && ($walletTypeId === 1 || $walletTypeId === 2)) {
             $awardedPoints = floor($amount / 100);
-            
+
             // Increment Chama Points Wallet (Type ID: 3)
             $this->updateWalletBalance($phoneNumber, 3, $awardedPoints);
 
@@ -339,7 +339,7 @@ class Utility extends Model
             foreach ($updatedBalances as $b) {
                 if ((int)$b['wallet_type_id'] === 3) $ptsBalance = (float)$b['balance'];
             }
-            
+
             // Log point transaction to audit trail ledger
             $this->logDemoTransaction($phoneNumber, "Credit", $awardedPoints, $ptsBalance, "Loyalty Points earned from Deposit");
 
@@ -365,11 +365,11 @@ class Utility extends Model
                 WHERE m.phone_number = :phone 
                 AND (t.description LIKE '%Loan%' OR t.description LIKE '%loan%')
                 ORDER BY t.id DESC LIMIT 1";
-                
+
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute([':phone' => $phoneNumber]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        
+
         return $row ? (float)$row['balance'] : 0.0;
     }
 
@@ -558,5 +558,60 @@ class Utility extends Model
             ':temp_level' => 'MemberMainMenu',
             ':message'    => $ussdCode
         ]);
+    }
+
+    /**
+     * Process Withdrawal from Main Wallet
+     * Debit main wallet, log transaction, send SMS confirmation
+     */
+    public function processWithdrawal(string $phoneNumber, float $amount): bool
+    {
+        try {
+            $wallets = $this->getMemberBalances($phoneNumber);
+            $mainBalance = 0.0;
+
+            foreach ($wallets as $w) {
+                if ((int)$w['wallet_type_id'] === 1) {
+                    $mainBalance = (float)$w['balance'];
+                }
+            }
+
+            // TODO: In production, compute "Available Balance" by subtracting any PENDING debits 
+            // from the core $mainBalance so they cannot request duplicate payouts simultaneously.
+            if ($mainBalance < $amount) {
+                $this->logger->warning("Insufficient balance for withdrawal: {$phoneNumber}");
+                return false;
+            }
+
+            // Fetch member metadata safely
+            $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
+            $stmtMem->execute([':phone' => $phoneNumber]);
+            $member = $stmtMem->fetch(PDO::FETCH_ASSOC);
+            $memberId = $member ? (int)$member['id'] : 0;
+
+            $receipt = "WD-" . strtoupper(bin2hex(random_bytes(4)));
+
+            // CRITICAL FIX: Mark status as 'Pending' instead of 'Completed'.
+            // DO NOT mutate the wallets table balance until your B2C payout callback returns HTTP 200.
+            $sql = "INSERT INTO transactions (member_id, type, amount, balance, status, payment_receipt, description, created_at) 
+            VALUES (:member_id, 'Debit', :amount, :balance, 'Pending', :receipt, :desc, NOW())";
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute([
+                ':member_id' => $memberId,
+                ':amount'    => $amount,
+                ':balance'   => $mainBalance, // Keeps track of current balance state when requested
+                ':receipt'   => $receipt,
+                ':desc'      => "USSD Withdrawal Request initiated"
+            ]);
+
+            // Send SMS alerting them it's in progress
+            $msg = "Your withdrawal request of KES " . number_format($amount, 2) . " has been received and is being processed. You will receive an M-Pesa confirmation shortly.";
+            $this->sendSMS($phoneNumber, $msg);
+
+            return true;
+        } catch (\Exception $e) {
+            $this->logger->error("Withdrawal failed for {$phoneNumber}: " . $e->getMessage());
+            return false;
+        }
     }
 }
