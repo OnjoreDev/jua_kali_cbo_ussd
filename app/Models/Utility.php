@@ -15,9 +15,9 @@ class Utility extends Model
 {
     /**
      * Internal Celcom Africa SMS Delivery Engine
-     * * Assembles payload parameters and dispatches structural alert texts 
+     * Assembles payload parameters and dispatches structural alert texts 
      * to members using environmental credentials.
-     * * @param string $msisdn Destination phone number in international format (e.g., 254...)
+     * @param string $msisdn Destination phone number in international format (e.g., 254...)
      * @param string $message The text content payload to transmit
      * @return bool True if message successfully accepted by the gateway provider API
      */
@@ -77,9 +77,9 @@ class Utility extends Model
 
     /**
      * Check if the phone number exists in the members table
-     * * Used by the USSD entry routing checkpoint to branch users 
+     * Used by the USSD entry routing checkpoint to branch users 
      * to either Registration prompts or the Member Main Menu.
-     * * @param string $phoneNumber Normalized telephone string
+     * @param string $phoneNumber Normalized telephone string
      * @return bool True if record entry exists
      */
     public function isMemberRegistered(string $phoneNumber): bool
@@ -92,9 +92,9 @@ class Utility extends Model
 
     /**
      * Insert registered user into members table and provision default wallets
-     * * Wraps user creation and ledger account allocation within a database transaction 
+     * Wraps user creation and ledger account allocation within a database transaction 
      * to guarantee all default wallets are set up successfully or rolled back entirely on error.
-     * * @param string $fullName First and last name input from USSD
+     * @param string $fullName First and last name input from USSD
      * @param string $phoneNumber User MSISDN
      * @param string $vocation Job specialization text input
      * @return bool True if completely processed and committed
@@ -158,10 +158,10 @@ class Utility extends Model
 
     /**
      * Fetch all ledger account balances associated with the user
-     * * FIXED: Includes explicit MAX() aggregation and a structural GROUP BY statement on the unique 
+     * Includes explicit MAX() aggregation and a structural GROUP BY statement on the unique 
      * wallet type metrics. This acts as a database filter barrier, wiping out duplicated line 
      * calculations caused by redundant join history.
-     * * @param string $phoneNumber Target lookup phone number
+     * @param string $phoneNumber Target lookup phone number
      * @return array Matrix array containing rows of individual wallet types and balances
      */
     public function getMemberBalances(string $phoneNumber): array
@@ -215,9 +215,9 @@ class Utility extends Model
 
     /**
      * Send an explicit account balance summary SMS text
-     * * Pulls the clean, non-duplicated balance arrays and iterates through them 
+     * Pulls the clean, non-duplicated balance arrays and iterates through them 
      * to formulate a singular multi-line balance text statement dispatched to the user.
-     * * @param string $phoneNumber Destination member handset phone string
+     * @param string $phoneNumber Destination member handset phone string
      */
     public function sendBalancesSms(string $phoneNumber): void
     {
@@ -236,8 +236,8 @@ class Utility extends Model
 
     /**
      * Atomic Ledger Balance Mutation Updates
-     * * Mutates ledger accounts directly via increment or decrement mathematical injections.
-     * * @param string $phoneNumber Target account identifier phone key
+     * Mutates ledger accounts directly via increment or decrement mathematical injections.
+     * @param string $phoneNumber Target account identifier phone key
      * @param int $walletTypeId Target target ledger ID (e.g., 1=Main, 2=Welfare)
      * @param float $amount Numeric monetary value shift (can accept negative floats for withdrawals)
      * @return bool Statement status execution check
@@ -258,9 +258,9 @@ class Utility extends Model
 
     /**
      * Audit trail transaction record engine
-     * * Maintains a permanent audit history log of all financial interactions, deposits, 
+     * Maintains a permanent audit history log of all financial interactions, deposits, 
      * withdrawals, and point actions for internal auditing.
-     * * @param string $phoneNumber Processing profile telephone key
+     * @param string $phoneNumber Processing profile telephone key
      * @param string $type Classification identifier (e.g., Credit, Debit)
      * @param float $amount Volume amount altered
      * @param float $currentBalance Post-calculated snapshot value balance
@@ -295,10 +295,10 @@ class Utility extends Model
 
     /**
      * Simulated credit engine with dynamic Loyalty Reward Points Allocation
-     * * Simulates external payment gateway response completion (STK push).
+     * Simulates external payment gateway response completion (STK push).
      * Modifies selected target wallet balances, triggers financial logging ledger 
      * sequences, and assigns loyalty points calculations based on payment scale benchmarks.
-     * * @param string $phoneNumber Target user executing saving deposit step
+     * @param string $phoneNumber Target user executing saving deposit step
      * @param int $walletTypeId Designated target endpoint account
      * @param float $amount Real-time value deposited
      * @return bool Loop execution confirmation status
@@ -354,7 +354,7 @@ class Utility extends Model
     /**
      * Obtains the current outstanding loan balance directly from transaction history logs.
      * Searches for completed or pending loan records inside the transactions ledger.
-     * * @param string $phoneNumber Target lookup phone number
+     * @param string $phoneNumber Target lookup phone number
      * @return float The current running balance total for loans
      */
     public function getOutstandingLoanBalance(string $phoneNumber): float
@@ -377,7 +377,7 @@ class Utility extends Model
      * Processes a new loan request entry.
      * Inserts records into loan_requests, logs an audit trace entry into transactions,
      * and sends the required text alert to the applicant.
-     * * @param string $phoneNumber Active member telephone key
+     * @param string $phoneNumber Active member telephone key
      * @param float $amount The principal loan volume requested
      * @return bool True if all elements insert successfully
      */
@@ -397,7 +397,6 @@ class Utility extends Model
             $memberId = (int)$member['id'];
 
             // 2. Insert record into loan_requests table with a pending status
-            // Note: approved_by is NOT NULL. We pass 0 as a temporary placeholder until admin action.
             $loanSql = "INSERT INTO loan_requests (member_id, wallet_id, amount, status, approved_by, created_at) 
                         VALUES (:member_id, :wallet_id, :amount, 'pending', 0, NOW())";
             $loanStmt = $this->pdo->prepare($loanSql);
@@ -441,6 +440,61 @@ class Utility extends Model
     }
 
     /**
+     * Formulates a fresh welfare tracking claim inside the database.
+     * @param string $phoneNumber Target member handset phone string
+     * @param string $claimType Category of emergency (e.g., medical, bereavement)
+     * @return bool True if record is stored successfully
+     */
+    public function createWelfareClaim(string $phoneNumber, string $claimType): bool
+    {
+        try {
+            $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
+            $stmtMem->execute([':phone' => $phoneNumber]);
+            $member = $stmtMem->fetch(PDO::FETCH_ASSOC);
+            if (!$member) return false;
+
+            $memberId = (int)$member['id'];
+            $trackingNo = strtoupper(substr($claimType, 0, 3)) . "-" . strtoupper(substr(md5(uniqid((string)rand(), true)), 0, 5));
+
+            $sql = "INSERT INTO welfare_claims (member_id, claim_type, amount_eligible, status, tracking_number, created_at) 
+                    VALUES (:member_id, :claim_type, 0.00, 'reviewing', :tracking, NOW())";
+            $stmt = $this->pdo->prepare($sql);
+            $result = $stmt->execute([
+                ':member_id'  => $memberId,
+                ':claim_type' => $claimType,
+                ':tracking'   => $trackingNo
+            ]);
+
+            if ($result) {
+                $msg = "Your Welfare claim application for " . strtoupper($claimType) . " has been filed successfully. Ticket reference: " . $trackingNo . ".";
+                $this->sendSMS($phoneNumber, $msg);
+                return true;
+            }
+            return false;
+        } catch (\Exception $e) {
+            $this->logger->error("Welfare claim insertion error for {$phoneNumber}: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Fetches claims filed under this phone number to display real-time status updates inside USSD.
+     * @param string $phoneNumber Target lookup phone number
+     * @return array Matrix array containing tracking details
+     */
+    public function getWelfareClaimsList(string $phoneNumber): array
+    {
+        $sql = "SELECT wc.tracking_number, wc.claim_type, wc.status, wc.amount_eligible 
+                FROM welfare_claims wc
+                JOIN members m ON wc.member_id = m.id
+                WHERE m.phone_number = :phone 
+                ORDER BY wc.id DESC LIMIT 3";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([':phone' => $phoneNumber]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
      * Dispatches immediate notification response for Menu Item 5 (Withdrawal Requests)
      */
     public function sendWithdrawalRequestAlert(string $phoneNumber): void
@@ -451,7 +505,6 @@ class Utility extends Model
 
     /**
      * Dispatches immediate notification response for Menu Item 6 (Customer Care Helpline information text)
-     * Updated phone contact output syntax to present clean internationalized strings uniformly.
      */
     public function sendCustomerCareAlert(string $phoneNumber): void
     {
@@ -461,7 +514,6 @@ class Utility extends Model
 
     /**
      * Tracks raw network multi-string inputs over lifetime session records
-     * Appends entries using a pipe separator (|) inside the database inbox table.
      */
     public function saveInput(string $input, string $sessionId)
     {
