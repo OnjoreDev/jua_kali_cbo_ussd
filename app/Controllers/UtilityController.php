@@ -238,8 +238,8 @@ class UtilityController extends Controller
 
                     } elseif ($lastInput === "4") {
                         $this->utility->saveInput($lastInput, $SESSIONID);
-                        $ussdResponse = "END Your loan request has been received. A confirmation message has been sent to your phone.";
-                        $this->utility->sendLoanRequestAlert($MSISDN);
+                        $ussdResponse = "CON Enter Loan Amount Request:\n00. Back";
+                        $this->utility->setTemplevel($SESSIONID, "CaptureLoanAmount");
 
                     } elseif ($lastInput === "5") {
                         $this->utility->saveInput($lastInput, $SESSIONID);
@@ -254,6 +254,30 @@ class UtilityController extends Controller
                     } else {
                         // Form Validation: Choice fell out of bound menu options (1-6)
                         $ussdResponse = "CON [Invalid Choice!]\n" . $this->renderMainMenu();
+                    }
+                    break;
+
+                // State: Intercepting, validating, and committing dynamic loan request parameters
+                case "CaptureLoanAmount":
+                    if ($lastInput === "00") {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
+                        $ussdResponse = $this->renderMainMenu();
+                        $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
+                    } elseif (!is_numeric($lastInput) || (float)$lastInput <= 0) {
+                        // Data Guard: Input must be a positive numeric value
+                        $ussdResponse = "CON [Invalid Input! Please enter a valid number value]\n\nEnter Loan Amount Request:";
+                    } else {
+                        $this->utility->saveInput($lastInput, $SESSIONID);
+                        $loanAmount = (float)$lastInput;
+                        
+                        // Execute processing logic inside model engine
+                        $isSubmitted = $this->utility->createLoanRequest($MSISDN, $loanAmount);
+                        
+                        if ($isSubmitted) {
+                            $ussdResponse = "END Loan request of amount {$loanAmount} has been received and is awaiting approval from the admins.";
+                        } else {
+                            $ussdResponse = "END System connection error processing loan request. Please retry later.";
+                        }
                     }
                     break;
 

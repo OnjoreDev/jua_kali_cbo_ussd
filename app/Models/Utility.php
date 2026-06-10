@@ -352,12 +352,92 @@ class Utility extends Model
     }
 
     /**
-     * Dispatches immediate notification response for Menu Item 4 (Loan Requests)
+     * Obtains the current outstanding loan balance directly from transaction history logs.
+     * Searches for completed or pending loan records inside the transactions ledger.
+     * * @param string $phoneNumber Target lookup phone number
+     * @return float The current running balance total for loans
      */
-    public function sendLoanRequestAlert(string $phoneNumber): void
+    public function getOutstandingLoanBalance(string $phoneNumber): float
     {
-        $msg = "Jua Kali CBO Alert: We have received your loan request. Our credit evaluation team will review your savings and wallet matrix and communicate via SMS within 24 hours.";
-        $this->sendSMS($phoneNumber, $msg);
+        $sql = "SELECT t.balance 
+                FROM transactions t
+                JOIN members m ON t.member_id = m.id
+                WHERE m.phone_number = :phone 
+                AND (t.description LIKE '%Loan%' OR t.description LIKE '%loan%')
+                ORDER BY t.id DESC LIMIT 1";
+                
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([':phone' => $phoneNumber]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        return $row ? (float)$row['balance'] : 0.0;
+    }
+
+    /**
+     * Processes a new loan request entry.
+     * Inserts records into loan_requests, logs an audit trace entry into transactions,
+     * and sends the required text alert to the applicant.
+     * * @param string $phoneNumber Active member telephone key
+     * @param float $amount The principal loan volume requested
+     * @return bool True if all elements insert successfully
+     */
+    public function createLoanRequest(string $phoneNumber, float $amount): bool
+    {
+        try {
+            $this->pdo->beginTransaction();
+
+            // 1. Fetch internal Member ID
+            $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
+            $stmtMem->execute([':phone' => $phoneNumber]);
+            $member = $stmtMem->fetch(PDO::FETCH_ASSOC);
+            if (!$member) {
+                $this->pdo->rollBack();
+                return false;
+            }
+            $memberId = (int)$member['id'];
+
+            // 2. Insert record into loan_requests table with a pending status
+            // Note: approved_by is NOT NULL. We pass 0 as a temporary placeholder until admin action.
+            $loanSql = "INSERT INTO loan_requests (member_id, wallet_id, amount, status, approved_by, created_at) 
+                        VALUES (:member_id, :wallet_id, :amount, 'pending', 0, NOW())";
+            $loanStmt = $this->pdo->prepare($loanSql);
+            $loanStmt->execute([
+                ':member_id' => $memberId,
+                ':wallet_id' => 4, // References the wallet_types id for 'loan' accounts
+                ':amount'    => (int)$amount
+            ]);
+
+            // 3. Compute dynamic running balance from transaction ledger records
+            $currentLoanBal = $this->getOutstandingLoanBalance($phoneNumber);
+            $newLoanBalance = $currentLoanBal + $amount;
+
+            // 4. Record a tracing entry line inside the transactions audit ledger
+            $receipt = "LOAN-" . strtoupper(bin2hex(random_bytes(4)));
+            $txSql = "INSERT INTO transactions (member_id, type, amount, balance, status, payment_receipt, description, created_at) 
+                      VALUES (:member_id, 'Credit', :amount, :balance, 'Pending', :receipt, :desc, NOW())";
+            $txStmt = $this->pdo->prepare($txSql);
+            $txStmt->execute([
+                ':member_id' => $memberId,
+                ':amount'    => (int)$amount,
+                ':balance'   => (int)$newLoanBalance,
+                ':receipt'   => $receipt,
+                ':desc'      => "Pending Loan Request Submission"
+            ]);
+
+            $this->pdo->commit();
+
+            // 5. Fire the precise confirmation alert text format requested
+            $msg = "Loan request of amount {$amount} has been received and is awaiting approval from the admins.";
+            $this->sendSMS($phoneNumber, $msg);
+
+            return true;
+        } catch (\Exception $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            $this->logger->error("Loan creation process aborted for {$phoneNumber}: " . $e->getMessage());
+            return false;
+        }
     }
 
     /**
