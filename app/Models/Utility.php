@@ -15,13 +15,12 @@ class Utility extends Model
 {
     /**
      * Internal Celcom Africa SMS Delivery Engine
-     * Assembles payload parameters and dispatches structural alert texts 
-     * to members using environmental credentials.
-     * @param string $msisdn Destination phone number in international format (e.g., 254...)
+     * Transmits transaction alerts to members via a structured JSON POST payload.
+     * * @param string $msisdn Destination phone number (e.g., 254713420287)
      * @param string $message The text content payload to transmit
      * @return bool True if message successfully accepted by the gateway provider API
      */
-    private function sendSMS(string $msisdn, string $message): bool
+    public function sendSMS(string $msisdn, string $message): bool
     {
         try {
             // Retrieve gateway authentication configurations from environment variables
@@ -36,34 +35,56 @@ class Utility extends Model
                 return false;
             }
 
-            // Urlencode payload message content safely to handle symbols, spaces, and linebreaks
-            $encodedMessage = urlencode($message);
+            // Celcom Africa official JSON payload architecture
+            $payload = [
+                'partnerID' => $partnerId,
+                'apikey'    => $apiKey,
+                'shortcode' => $senderId,
+                'mobile'    => trim($msisdn),
+                'message'   => $message
+            ];
 
-            // Build absolute query request string structure for standard GET execution
-            $reqUrl = rtrim($baseUrl, '/') . '/?apikey=' . trim($apiKey) . '&partnerID=' . trim($partnerId) . '&shortcode=' . trim($senderId) . '&mobile=' . trim($msisdn) . '&message=' . $encodedMessage;
+            $jsonPayload = json_encode($payload);
 
             // Initialize a network session context using cURL
             $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, $reqUrl);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true); // Intercept and return response as string
-            curl_setopt($ch, CURLOPT_TIMEOUT, 4);           // Maximum wait boundary constraint (seconds)
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Bypass local peer SSL lookup for speed compatibility
+            curl_setopt($ch, CURLOPT_URL, rtrim($baseUrl, '/'));
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonPayload);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 5); // Maximum wait boundary constraint
+            
+            // Explicitly set headers for Content-Type validation
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                'Content-Type: application/json',
+                'Content-Length: ' . strlen($jsonPayload)
+            ]);
+
+            // Bypass local peer SSL lookup for staging environment compatibility
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
             curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
 
-            // Execute the remote API call and fetch HTTP metadata status code
+            // Execute the remote API call
             $response = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
 
             // Handle network transport Layer Failures
             if ($response === false) {
-                $this->logger->error("SMS gateway network timeout for {$msisdn}");
+                $this->logger->error("SMS gateway network timeout or connection failure for {$msisdn}");
                 return false;
             }
 
-            // Check if gateway returned anything other than HTTP 200 Success status
+            // Check if gateway returned an unexpected HTTP Code status
             if ($httpCode !== 200) {
                 $this->logger->warning("SMS gateway answered with unexpected HTTP Code {$httpCode} for {$msisdn}. Response: " . trim($response));
+                return false;
+            }
+
+            // Handle valid HTTP 200 but internal gateway errors
+            $responseData = json_decode($response, true);
+            if (isset($responseData['response-code']) && (int)$responseData['response-code'] !== 200) {
+                $this->logger->warning("Celcom Africa API Error [{$responseData['response-code']}]: {$responseData['response-description']} for {$msisdn}");
                 return false;
             }
 
@@ -74,7 +95,6 @@ class Utility extends Model
             return false;
         }
     }
-
     /**
      * Check if the phone number exists in the members table
      * Used by the USSD entry routing checkpoint to branch users 
@@ -499,7 +519,7 @@ class Utility extends Model
      */
     public function sendWithdrawalRequestAlert(string $phoneNumber): void
     {
-        $msg = "Jua Kali CBO Alert: Your withdrawal request has been received and added to our processing queue. Funds will be released via M-Pesa shortly.";
+        $msg = "Jua Kali CBO Alert: Your withdrawal request has been received. Funds will be released via M-Pesa shortly.";
         $this->sendSMS($phoneNumber, $msg);
     }
 

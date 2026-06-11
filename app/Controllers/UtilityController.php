@@ -399,8 +399,9 @@ class UtilityController extends Controller
                         foreach ($wallets as $w) {
                             if ((int)$w['wallet_type_id'] === 3) $points = (float)$w['balance'];
                         }
-                        $cashValue = $points * 100;
-                        $ussdResponse = "CON Balance: {$points} Points (KES " . number_format($cashValue, 2) . ") \n00. Back";
+
+                        // Modified to strictly show points balance without the conversion text
+                        $ussdResponse = "CON Balance: {$points} Points \n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                     } elseif ($lastInput === "2") {
                         $this->utility->saveInput($lastInput, $SESSIONID);
@@ -435,14 +436,30 @@ class UtilityController extends Controller
                         } else {
                             $cashValue = $pointsToRedeem * 100;
 
+                            // 1. Perform database wallet balances update
                             $this->utility->updateWalletBalance($MSISDN, 3, -$pointsToRedeem);
                             $this->utility->updateWalletBalance($MSISDN, 1, $cashValue);
 
-                            $this->utility->logDemoTransaction($MSISDN, "Debit", (float)$pointsToRedeem, ($currentPoints - $pointsToRedeem), "Points redemption");
+                            // 2. Compute remaining balance mathematically for real-time responsiveness
+                            $remainingPoints = $currentPoints - $pointsToRedeem;
+
+                            // Log transaction changes in history
+                            $this->utility->logDemoTransaction($MSISDN, "Debit", (float)$pointsToRedeem, $remainingPoints, "Points redemption");
                             $this->utility->logDemoTransaction($MSISDN, "Credit", $cashValue, ($mainBalance + $cashValue), "Cash swap");
 
-                            $ussdResponse = "CON Conversion Successful! Added KES " . number_format($cashValue, 2) . " to your Main Wallet.\n00. Back";
-                            $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
+                            // 3. TRIGGER CUSTOMIZED SMS WITH REMAINING BALANCE
+                            // Since Utility.php doesn't do this automatically for point swaps, we invoke it directly here.
+                            $smsMessage = "Confirmed: You have successfully redeemed {$pointsToRedeem} Chama Points for KES " . number_format($cashValue, 2) . ". Your remaining balance is {$remainingPoints} Points.";
+                            
+                            // Using a reflection or wrapper shortcut inside controller to invoke your sendSMS utility mechanism
+                            // Note: Since sendSMS is private inside Utility.php, make sure your model has a public wrapper 
+                            // or access point, otherwise change `private function sendSMS` to `public function sendSMS` inside Utility.php
+                            $this->utility->sendSMS($MSISDN, $smsMessage);
+
+                            // 4. TERMINATE SESSION WITH "END" AND DISPLAY REMAINING BALANCE
+                            $ussdResponse = "END Conversion Successful!\n"
+                                . "Added KES " . number_format($cashValue, 2) . " to your Main Wallet.\n"
+                                . "Remaining Balance: {$remainingPoints} Points.";
                         }
                     }
                     break;
@@ -452,37 +469,50 @@ class UtilityController extends Controller
                         $this->utility->saveInput($lastInput, $SESSIONID);
                         $ussdResponse = $this->renderMainMenu();
                         $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
-                    } elseif (!is_numeric($lastInput) || (float)$lastInput <= 0 || (float)$lastInput > 70000) {
-                        $ussdResponse = "CON [Invalid Amount! Enter a value between 1 and 70,000]\n\nEnter Amount to Withdraw:";
                     } else {
-                        $amount = (float)$lastInput;
+                        // CRITICAL FIX 1: Evaluate the Date Constraint FIRST before checking amount properties
+                        $currentDay = (int)date('j');
+                        $allowedDays = [1, 3, 5, 15];
 
-                        // 1. Fetch current balances to validate right here in the controller
-                        $wallets = $this->utility->getMemberBalances($MSISDN);
-                        $mainBalance = 0.0;
-                        foreach ($wallets as $w) {
-                            if ((int)$w['wallet_type_id'] === 1) {
-                                $mainBalance = (float)$w['balance'];
-                            }
+                        if (!in_array($currentDay, $allowedDays, true)) {
+                            // CRITICAL FIX 2: Switched from 'CON' to 'END' to forcefully kill the session 
+                            // This blocks any potential logic bypasses or automated redials on restricted days.
+                            $ussdResponse = "END Withdrawal Restriction!\n"
+                                . "Withdrawals can only be requested on the 1st, 3rd, 5th, or 15th of the month.\n"
+                                . "Current Day: " . date('d-M-Y') . ". Access Denied.";
                         }
-
-                        // 2. STAGE VALIDATION: Check if withdrawal amount exceeds current main wallet balance
-                        if ($amount > $mainBalance) {
-                            $formattedBal = number_format($mainBalance, 2);
-                            $ussdResponse = "CON [Insufficient Balance!]\n"
-                                . "Your Main Wallet has KES {$formattedBal}.\n"
-                                . "Please enter a lesser amount:\n"
-                                . "00. Back";
-                            // Keep their state level at CaptureWithdrawalAmount so they can try a smaller amount
+                        // Date is valid, now sanitize and parse the amount input
+                        elseif (!is_numeric($lastInput) || (float)$lastInput <= 0 || (float)$lastInput > 70000) {
+                            $ussdResponse = "CON [Invalid Amount! Enter a value between 1 and 70,000]\n\nEnter Amount to Withdraw:";
                         } else {
-                            // 3. Balance is sufficient, proceed with logging the request safely
-                            $this->utility->saveInput($lastInput, $SESSIONID);
-                            $isProcessed = $this->utility->processWithdrawal($MSISDN, $amount);
+                            $amount = (float)$lastInput;
 
-                            if ($isProcessed) {
-                                $ussdResponse = "END Withdrawal request of KES " . number_format($amount, 2) . " has been received.\nFunds will be sent via M-Pesa shortly.";
+                            // Fetch current balances to validate depth
+                            $wallets = $this->utility->getMemberBalances($MSISDN);
+                            $mainBalance = 0.0;
+                            foreach ($wallets as $w) {
+                                if ((int)$w['wallet_type_id'] === 1) {
+                                    $mainBalance = (float)$w['balance'];
+                                }
+                            }
+
+                            // STAGE VALIDATION: Ensure withdrawal request does not exceed main wallet holdings
+                            if ($amount > $mainBalance) {
+                                $formattedBal = number_format($mainBalance, 2);
+                                $ussdResponse = "CON [Insufficient Balance!]\n"
+                                    . "Your Main Wallet has KES {$formattedBal}.\n"
+                                    . "Please enter a lesser amount:\n"
+                                    . "00. Back";
                             } else {
-                                $ussdResponse = "END System error processing your withdrawal. Please try again later.";
+                                // Date, Input Format, and Balance levels are completely valid. Process request.
+                                $this->utility->saveInput($lastInput, $SESSIONID);
+                                $isProcessed = $this->utility->processWithdrawal($MSISDN, $amount);
+
+                                if ($isProcessed) {
+                                    $ussdResponse = "END Withdrawal request of KES " . number_format($amount, 2) . " has been received.\nFunds will be sent via M-Pesa shortly.";
+                                } else {
+                                    $ussdResponse = "END System error processing your withdrawal. Please try again later.";
+                                }
                             }
                         }
                     }
