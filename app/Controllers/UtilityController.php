@@ -12,29 +12,17 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 /**
  * UtilityController Class
  * Manages incoming HTTP telecommunication requests from the USSD Gateway.
- * Controls multi-step state menus, handles user interaction routing, and interfaces
- * directly with the Utility Model with explicit form and data validation rules.
  */
 class UtilityController extends Controller
 {
-    /**
-     * Instance of the Utility model to encapsulate database interactions and business logic
-     */
     private Utility $utility;
 
-    /**
-     * Dependency Injection Constructor
-     * @param ContainerInterface $container PSR-11 Dependency Injection Container
-     */
     public function __construct(ContainerInterface $container)
     {
         parent::__construct($container);
         $this->utility = $container->get(Utility::class);
     }
 
-    /**
-     * Normalizes Kenyan MSISDN inputs to an absolute internationalized format.
-     */
     private function normalizePhoneNumber(string $phone): string
     {
         $phone = trim($phone);
@@ -44,9 +32,6 @@ class UtilityController extends Controller
         return $phone;
     }
 
-    /**
-     * Helper to validate that an input contains a valid first and last name.
-     */
     private function isValidFullName(string $name): bool
     {
         $name = preg_replace('/\s+/', ' ', trim($name));
@@ -59,18 +44,12 @@ class UtilityController extends Controller
         return true;
     }
 
-    /**
-     * Helper to validate vocation fields.
-     */
     private function isValidVocation(string $vocation): bool
     {
         $vocation = trim($vocation);
         return (bool) preg_match("/^[a-zA-Z\s\-]{3,30}$/", $vocation);
     }
 
-    /**
-     * Renders the root menu options presented to successfully registered CBO members.
-     */
     private function renderMainMenu(): string
     {
         return "CON Welcome to Jua Kali CBO. Select an option:\n"
@@ -82,9 +61,6 @@ class UtilityController extends Controller
             . "6. Customer Care";
     }
 
-    /**
-     * PSR-7 Single-Action invokable execution loop.
-     */
     public function __invoke(Request $request, Response $response): Response
     {
         $queryParams = $request->getQueryParams();
@@ -290,7 +266,7 @@ class UtilityController extends Controller
                         $amount = (float)$lastInput;
                         $this->utility->processSimulatedDeposit($MSISDN, 1, $amount);
                         $ussdResponse = "END KES " . number_format($amount, 2) . " credited to Main Wallet.";
-                        $this->utility->setTemplevel($SESSIONID, "MemberMainMenu"); // optional cleanup
+                        $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
                     }
                     break;
 
@@ -400,7 +376,6 @@ class UtilityController extends Controller
                             if ((int)$w['wallet_type_id'] === 3) $points = (float)$w['balance'];
                         }
 
-                        // Modified to strictly show points balance without the conversion text
                         $ussdResponse = "CON Balance: {$points} Points \n00. Back";
                         $this->utility->setTemplevel($SESSIONID, "GenericBackRoute");
                     } elseif ($lastInput === "2") {
@@ -425,10 +400,8 @@ class UtilityController extends Controller
                         $wallets = $this->utility->getMemberBalances($MSISDN);
 
                         $currentPoints = 0.0;
-                        $mainBalance = 0.0;
                         foreach ($wallets as $w) {
                             if ((int)$w['wallet_type_id'] === 3) $currentPoints = (float)$w['balance'];
-                            if ((int)$w['wallet_type_id'] === 1) $mainBalance = (float)$w['balance'];
                         }
 
                         if ($pointsToRedeem > $currentPoints) {
@@ -436,27 +409,18 @@ class UtilityController extends Controller
                         } else {
                             $cashValue = $pointsToRedeem * 100;
 
-                            // 1. Perform database wallet balances update
-                            $this->utility->updateWalletBalance($MSISDN, 3, -$pointsToRedeem);
-                            $this->utility->updateWalletBalance($MSISDN, 1, $cashValue);
+                            // Shared reference code to tie the swap flow together
+                            $sharedRef = strtoupper(bin2hex(random_bytes(4)));
 
-                            // 2. Compute remaining balance mathematically for real-time responsiveness
+                            // 1. Log Split Ledger Inflow/Outflows. The database triggers update wallets state rows automatically.
+                            $this->utility->logDisbursement($MSISDN, 3, $pointsToRedeem, "Points redemption swap", "DSB-PTS" . $sharedRef);
+                            $this->utility->logReceipt($MSISDN, 1, $cashValue, "Cash swap from points conversion", "RCP-PTS" . $sharedRef);
+
                             $remainingPoints = $currentPoints - $pointsToRedeem;
 
-                            // Log transaction changes in history
-                            $this->utility->logDemoTransaction($MSISDN, "Debit", (float)$pointsToRedeem, $remainingPoints, "Points redemption");
-                            $this->utility->logDemoTransaction($MSISDN, "Credit", $cashValue, ($mainBalance + $cashValue), "Cash swap");
-
-                            // 3. TRIGGER CUSTOMIZED SMS WITH REMAINING BALANCE
-                            // Since Utility.php doesn't do this automatically for point swaps, we invoke it directly here.
                             $smsMessage = "Confirmed: You have successfully redeemed {$pointsToRedeem} Chama Points for KES " . number_format($cashValue, 2) . ". Your remaining balance is {$remainingPoints} Points.";
-                            
-                            // Using a reflection or wrapper shortcut inside controller to invoke your sendSMS utility mechanism
-                            // Note: Since sendSMS is private inside Utility.php, make sure your model has a public wrapper 
-                            // or access point, otherwise change `private function sendSMS` to `public function sendSMS` inside Utility.php
                             $this->utility->sendSMS($MSISDN, $smsMessage);
 
-                            // 4. TERMINATE SESSION WITH "END" AND DISPLAY REMAINING BALANCE
                             $ussdResponse = "END Conversion Successful!\n"
                                 . "Added KES " . number_format($cashValue, 2) . " to your Main Wallet.\n"
                                 . "Remaining Balance: {$remainingPoints} Points.";
@@ -470,24 +434,19 @@ class UtilityController extends Controller
                         $ussdResponse = $this->renderMainMenu();
                         $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
                     } else {
-                        // CRITICAL FIX 1: Evaluate the Date Constraint FIRST before checking amount properties
                         $currentDay = (int)date('j');
                         $allowedDays = [1, 3, 5, 15];
 
                         if (!in_array($currentDay, $allowedDays, true)) {
-                            // CRITICAL FIX 2: Switched from 'CON' to 'END' to forcefully kill the session 
-                            // This blocks any potential logic bypasses or automated redials on restricted days.
                             $ussdResponse = "END Withdrawal Restriction!\n"
                                 . "Withdrawals can only be requested on the 1st, 3rd, 5th, or 15th of the month.\n"
                                 . "Current Day: " . date('d-M-Y') . ". Access Denied.";
                         }
-                        // Date is valid, now sanitize and parse the amount input
                         elseif (!is_numeric($lastInput) || (float)$lastInput <= 0 || (float)$lastInput > 70000) {
                             $ussdResponse = "CON [Invalid Amount! Enter a value between 1 and 70,000]\n\nEnter Amount to Withdraw:";
                         } else {
                             $amount = (float)$lastInput;
 
-                            // Fetch current balances to validate depth
                             $wallets = $this->utility->getMemberBalances($MSISDN);
                             $mainBalance = 0.0;
                             foreach ($wallets as $w) {
@@ -496,7 +455,6 @@ class UtilityController extends Controller
                                 }
                             }
 
-                            // STAGE VALIDATION: Ensure withdrawal request does not exceed main wallet holdings
                             if ($amount > $mainBalance) {
                                 $formattedBal = number_format($mainBalance, 2);
                                 $ussdResponse = "CON [Insufficient Balance!]\n"
@@ -504,7 +462,6 @@ class UtilityController extends Controller
                                     . "Please enter a lesser amount:\n"
                                     . "00. Back";
                             } else {
-                                // Date, Input Format, and Balance levels are completely valid. Process request.
                                 $this->utility->saveInput($lastInput, $SESSIONID);
                                 $isProcessed = $this->utility->processWithdrawal($MSISDN, $amount);
 
