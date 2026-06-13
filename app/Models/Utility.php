@@ -6,6 +6,8 @@ namespace App\Models;
 
 use PDO;
 
+use Exception;
+
 /**
  * Utility Model Class
  * Handles core business logic, database queries, SMS notifications via Celcom Africa,
@@ -538,6 +540,103 @@ class Utility extends Model
             return true;
         } catch (\Exception $e) {
             $this->logger->error("Withdrawal failed for {$phoneNumber}: " . $e->getMessage());
+            return false;
+        }
+    }
+    //mpesa functions
+    /**
+     * Generates a valid OAuth Access Token from Safaricom Daraja
+     */
+    /**
+     * Generates a valid OAuth Access Token from Safaricom Daraja
+     */
+    private function getDarajaAccessToken(): string
+    {
+        $consumerKey = $_ENV['MPESA_CONSUMER_KEY'] ?? '';
+        $consumerSecret = $_ENV['MPESA_CONSUMER_SECRET'] ?? '';
+        $url = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials";
+
+        $credentials = base64_encode($consumerKey . ':' . $consumerSecret);
+
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Basic " . $credentials]);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HEADER, false);
+        
+        // Critical network fallback flags:
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5); // Timeout early after 5 seconds if Safaricom is dead
+        curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+
+        $response = curl_exec($ch);
+        
+        if (curl_errno($ch)) {
+            $error_msg = curl_error($ch);
+            $this->logger->error("Daraja Access Token cURL Network Error", ['error' => $error_msg]);
+            curl_close($ch);
+            throw new \RuntimeException("Daraja token connection timeout.");
+        }
+
+        $result = json_decode($response, true);
+        curl_close($ch);
+
+        if (!isset($result['access_token'])) {
+            $this->logger->error("Failed to generate M-Pesa access token", ['response' => $response]);
+            throw new \RuntimeException("M-Pesa Token Generation Failed.");
+        }
+
+        return $result['access_token'];
+    }
+
+    
+    /**
+     * Initiates an STK Push with a specific destination callback URL config
+     */
+    public function initiateStkPush(string $phoneNumber, float $amount, string $accountReference, string $callbackUrl): bool
+    {
+        try {
+            $accessToken = $this->getDarajaAccessToken();
+            $url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest";
+
+            $shortcode = $_ENV['MPESA_BUSINESS_SHORTCODE'] ?? '';
+            $passkey = $_ENV['MPESA_PASSKEY'] ?? '';
+
+            $timestamp = date('YmdHis');
+            $password = base64_encode($shortcode . $passkey . $timestamp);
+
+            $payload = [
+                "BusinessShortCode" => $shortcode,
+                "Password"          => $password,
+                "Timestamp"         => $timestamp,
+                "TransactionType"   => "CustomerPayBillOnline",
+                "Amount"            => (int)$amount,
+                "PartyA"            => $phoneNumber,
+                "PartyB"            => $shortcode,
+                "PhoneNumber"       => $phoneNumber,
+                "CallBackURL"       => $callbackUrl, // <-- Uses the specific route passed from the State
+                "AccountReference"  => $accountReference,
+                "TransactionDesc"   => "USSD Deposit Triggered"
+            ];
+
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                "Authorization: Bearer " . $accessToken,
+                "Content-Type: application/json"
+            ]);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+
+            $response = curl_exec($ch);
+            $result = json_decode($response, true);
+            curl_close($ch);
+
+            return (isset($result['ResponseCode']) && $result['ResponseCode'] === "0");
+
+        } catch (\Exception $e) {
             return false;
         }
     }
