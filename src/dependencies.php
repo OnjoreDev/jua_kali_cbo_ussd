@@ -7,6 +7,7 @@ use Monolog\Handler\StreamHandler;
 use Monolog\Logger;
 use Psr\Container\ContainerInterface;
 use Slim\Views\Twig;
+use App\Ussd\UssdStateRegistry;
 
 return function (ContainerBuilder $containerBuilder) {
     $containerBuilder->addDefinitions([
@@ -23,7 +24,7 @@ return function (ContainerBuilder $containerBuilder) {
 
             // $processor = new UidProcessor();
             // $logger->pushProcessor($processor);
-    
+
             $handler = new StreamHandler($loggerSettings['path'], $loggerSettings['level']);
             $logger->pushHandler($handler);
 
@@ -43,6 +44,12 @@ return function (ContainerBuilder $containerBuilder) {
 
             return $pdo;
         },
-
+        // Registry for ussd states:
+        UssdStateRegistry::class => function (ContainerInterface $c) {
+            return new UssdStateRegistry($c);
+        },
+       
     ]);
+   
+
 };
