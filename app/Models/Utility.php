@@ -369,12 +369,12 @@ class Utility extends Model
             $memberId = (int)$member['id'];
 
             // Insert pending contract line item
-            $loanSql = "INSERT INTO loan_requests (member_id, wallet_id, amount, status, approved_by, created_at) 
-                        VALUES (:member_id, :wallet_id, :amount, 'pending', 0, NOW())";
+            $loanSql = "INSERT INTO loan_requests (member_id, wallet_type_id, amount, status, approved_by, created_at) 
+                        VALUES (:member_id, :wallet_type_id, :amount, 'pending', 0, NOW())";
             $loanStmt = $this->pdo->prepare($loanSql);
             $loanStmt->execute([
                 ':member_id' => $memberId,
-                ':wallet_id' => 4,
+                ':wallet_type_id' => 4,
                 ':amount'    => (int)$amount
             ]);
 
@@ -593,51 +593,60 @@ class Utility extends Model
     /**
      * Initiates an STK Push with a specific destination callback URL config
      */
-    public function initiateStkPush(string $phoneNumber, float $amount, string $accountReference, string $callbackUrl): bool
-    {
-        try {
-            $accessToken = $this->getDarajaAccessToken();
-            $url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest";
+   public function initiateStkPush(string $phoneNumber, float $amount, string $accountReference, string $callbackUrl): bool
+{
+    try {
+        $accessToken = $this->getDarajaAccessToken();
+        $url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest";
 
-            $shortcode = $_ENV['MPESA_BUSINESS_SHORTCODE'] ?? '';
-            $passkey = $_ENV['MPESA_PASSKEY'] ?? '';
+        $shortcode = $_ENV['MPESA_BUSINESS_SHORTCODE'] ?? '';
+        $passkey = $_ENV['MPESA_PASSKEY'] ?? '';
 
-            $timestamp = date('YmdHis');
-            $password = base64_encode($shortcode . $passkey . $timestamp);
+        // FIX: Explicitly force East African Time (EAT) so it matches Safaricom's validation clock
+        $date = new \DateTime("now", new \DateTimeZone("Africa/Nairobi"));
+        $timestamp = $date->format('YmdHis');
+        
+        $password = base64_encode($shortcode . $passkey . $timestamp);
 
-            $payload = [
-                "BusinessShortCode" => $shortcode,
-                "Password"          => $password,
-                "Timestamp"         => $timestamp,
-                "TransactionType"   => "CustomerPayBillOnline",
-                "Amount"            => (int)$amount,
-                "PartyA"            => $phoneNumber,
-                "PartyB"            => $shortcode,
-                "PhoneNumber"       => $phoneNumber,
-                "CallBackURL"       => $callbackUrl, // <-- Uses the specific route passed from the State
-                "AccountReference"  => $accountReference,
-                "TransactionDesc"   => "USSD Deposit Triggered"
-            ];
+        $payload = [
+            "BusinessShortCode" => $shortcode,
+            "Password"          => $password,
+            "Timestamp"         => $timestamp,
+            "TransactionType"   => "CustomerPayBillOnline",
+            "Amount"            => (int)$amount,
+            "PartyA"            => $phoneNumber,
+            "PartyB"            => $shortcode,
+            "PhoneNumber"       => $phoneNumber,
+            "CallBackURL"       => $callbackUrl,
+            "AccountReference"  => $accountReference,
+            "TransactionDesc"   => "USSD Deposit Triggered"
+        ];
 
-            $ch = curl_init($url);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                "Authorization: Bearer " . $accessToken,
-                "Content-Type: application/json"
-            ]);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            "Authorization: Bearer " . $accessToken,
+            "Content-Type: application/json"
+        ]);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
 
-            $response = curl_exec($ch);
-            $result = json_decode($response, true);
-            curl_close($ch);
+        $response = curl_exec($ch);
+        
+        // TEMPORARY DEBUGGING LOG (Remove this in production)
+        // Check your server error logs or log files to see exactly why Safaricom is rejecting it.
+        $this->logger->info("Daraja Response Payload: " . $response);
 
-            return (isset($result['ResponseCode']) && $result['ResponseCode'] === "0");
+        $result = json_decode($response, true);
+        curl_close($ch);
 
-        } catch (\Exception $e) {
-            return false;
-        }
+        return (isset($result['ResponseCode']) && $result['ResponseCode'] === "0");
+
+    } catch (\Exception $e) {
+        $this->logger->error("STK Push Exception: " . $e->getMessage());
+        return false;
     }
+}
 }
