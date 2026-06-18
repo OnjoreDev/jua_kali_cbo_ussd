@@ -87,7 +87,7 @@ class Utility extends Model
      */
     public function isMemberRegistered(string $phoneNumber): bool
     {
-        $sql = "SELECT id FROM members WHERE phone_number = :phone LIMIT 1";
+        $sql = "SELECT id FROM members WHERE phone = :phone LIMIT 1";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute([':phone' => $phoneNumber]);
         return (bool) $stmt->fetch();
@@ -96,16 +96,16 @@ class Utility extends Model
     /**
      * Insert registered user into members table and provision default wallets
      */
-    public function registerNewMember(string $fullName, string $phoneNumber, string $vocation): bool
+    public function registerNewMember(string $name, string $phoneNumber, string $vocation): bool
     {
         try {
             $this->pdo->beginTransaction();
 
-            $sql = "INSERT INTO members (fullname, phone_number, vocation) VALUES (:fullname, :phone_number, :vocation)";
+            $sql = "INSERT INTO members (name, phone, vocation) VALUES (:name, :phone, :vocation)";
             $stmt = $this->pdo->prepare($sql);
             $result = $stmt->execute([
-                ':fullname' => $fullName,
-                ':phone_number' => $phoneNumber,
+                ':name' => $name,
+                ':phone' => $phoneNumber,
                 ':vocation' => $vocation
             ]);
 
@@ -132,7 +132,7 @@ class Utility extends Model
 
             $this->pdo->commit();
 
-            $welcomeMessage = "Welcome to Jua Kali CBO, {$fullName}! Your account has been set up successfully as a {$vocation}. Dial our code anytime to access services.";
+            $welcomeMessage = "Welcome to Jua Kali CBO, {$name}! Your account has been set up successfully as a {$vocation}. Dial our code anytime to access services.";
             $this->sendSMS($phoneNumber, $welcomeMessage);
 
             return true;
@@ -158,7 +158,7 @@ class Utility extends Model
                 FROM wallets w
                 JOIN members m ON w.member_id = m.id
                 JOIN wallet_types wt ON w.wallet_type_id = wt.id
-                WHERE m.phone_number = :phone 
+                WHERE m.phone = :phone 
                 GROUP BY wt.id, wt.name, wt.currency
                 ORDER BY wt.id ASC";
         $stmt = $this->pdo->prepare($sql);
@@ -166,7 +166,7 @@ class Utility extends Model
         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         if (empty($results)) {
-            $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
+            $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone = :phone LIMIT 1");
             $stmtMem->execute([':phone' => $phoneNumber]);
             $member = $stmtMem->fetch(PDO::FETCH_ASSOC);
 
@@ -217,7 +217,7 @@ class Utility extends Model
      */
     public function logReceipt(string $phoneNumber, int $walletTypeId, float $amount, string $desc, ?string $customReceipt = null): bool
     {
-        $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
+        $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone = :phone LIMIT 1");
         $stmtMem->execute([':phone' => $phoneNumber]);
         $member = $stmtMem->fetch(PDO::FETCH_ASSOC);
         if (!$member) return false;
@@ -261,7 +261,7 @@ class Utility extends Model
      */
     public function logDisbursement(string $phoneNumber, int $walletTypeId, float $amount, string $desc, ?string $customReceipt = null): bool
     {
-        $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
+        $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone = :phone LIMIT 1");
         $stmtMem->execute([':phone' => $phoneNumber]);
         $member = $stmtMem->fetch(PDO::FETCH_ASSOC);
         if (!$member) return false;
@@ -361,7 +361,7 @@ class Utility extends Model
     public function createLoanRequest(string $phoneNumber, float $amount): bool
     {
         try {
-            $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
+            $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone = :phone LIMIT 1");
             $stmtMem->execute([':phone' => $phoneNumber]);
             $member = $stmtMem->fetch(PDO::FETCH_ASSOC);
             if (!$member) return false;
@@ -395,7 +395,7 @@ class Utility extends Model
     public function createWelfareClaim(string $phoneNumber, string $claimType): bool
     {
         try {
-            $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone_number = :phone LIMIT 1");
+            $stmtMem = $this->pdo->prepare("SELECT id FROM members WHERE phone = :phone LIMIT 1");
             $stmtMem->execute([':phone' => $phoneNumber]);
             $member = $stmtMem->fetch(PDO::FETCH_ASSOC);
             if (!$member) return false;
@@ -432,7 +432,7 @@ class Utility extends Model
         $sql = "SELECT wc.tracking_number, wc.claim_type, wc.status, wc.amount_eligible 
                 FROM welfare_claims wc
                 JOIN members m ON wc.member_id = m.id
-                WHERE m.phone_number = :phone 
+                WHERE m.phone = :phone 
                 ORDER BY wc.id DESC LIMIT 3";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute([':phone' => $phoneNumber]);
