@@ -24,13 +24,13 @@ class MemberMainMenuState implements UssdStateHandlerInterface
     }
 
     public function handle(
-        string $sessionId, 
-        string $msisdn, 
-        string $lastInput, 
-        array $inputArray, 
+        string $sessionId,
+        string $msisdn,
+        string $lastInput,
+        array $inputArray,
         Utility $utility
     ): string {
-        
+
         // FIX: If this is a fresh session dial or entry reset, bypass validation 
         // and instantly render the clean main menu dashboard.
         if ($lastInput === "" || $lastInput === "39" || $lastInput === "00") {
@@ -50,16 +50,16 @@ class MemberMainMenuState implements UssdStateHandlerInterface
 
             case "3":
                 $utility->saveInput($lastInput, $sessionId);
-                $wallets = $utility->getMemberBalances($msisdn);
-                
+                // $wallets = $utility->getMemberBalances($msisdn);
+
                 $points = 0.0;
-                if (is_array($wallets)) {
-                    foreach ($wallets as $w) {
-                        if ((int)$w['wallet_type_id'] === 3) {
-                            $points = (float)$w['balance'];
-                        }
-                    }
-                }
+                // if (is_array($wallets)) {
+                //     foreach ($wallets as $w) {
+                //         if ((int)$w['wallet_type_id'] === 3) {
+                //             $points = (float)$w['balance'];
+                //         }
+                //     }
+                // }
 
                 if ($points <= 0) {
                     $utility->setTemplevel($sessionId, "MemberMainMenu");
@@ -79,11 +79,24 @@ class MemberMainMenuState implements UssdStateHandlerInterface
                 $utility->setTemplevel($sessionId, "CaptureWithdrawalAmount");
                 return "CON Enter Amount to Withdraw from Main Wallet:\n0. Back";
 
+                // In App\Ussd\States\MemberMainMenuState.php
+
             case "6":
                 $utility->saveInput($lastInput, $sessionId);
-                $utility->sendCustomerCareAlert($msisdn);
-                return "END Please call +254790727272 for dynamic customer support. Details have been texted to you.";
 
+                // 1. Perform the pre-flight registration check first
+                if (!$utility->isMemberRegistered($msisdn)) {
+                    return "END You are not a registered member. Please register to access Customer Care.";
+                }
+
+                // 2. Trigger the SMS via the API
+                $success = $utility->requestCustomerCareSms($msisdn);
+
+                if ($success) {
+                    return "END Support details have been sent to your phone. Thank you.";
+                }
+
+                return "END Sorry, we could not process your request at this time. Please try again.";
             default:
                 // Prepend error warning prefix only if they actually input something invalid
                 return "CON [Invalid Choice!]\n" . $this->renderMenuText();

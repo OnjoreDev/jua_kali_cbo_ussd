@@ -9,40 +9,49 @@ use App\Models\Utility;
 
 class CaptureVocationState implements UssdStateHandlerInterface
 {
-    /**This class captures the vocation, safely parses the name from the input trail array, 
-     * commits the registration transaction into your database, 
-     * and sends out the welcome text message via Celcom Africa 
-     * */
+    /**
+     * Captures vocation, registers the member, and transitions to VerifyOtpState.
+     */
     public function handle(
-        string $sessionId, 
-        string $msisdn, 
-        string $lastInput, 
-        array $inputArray, 
+        string $sessionId,
+        string $msisdn,
+        string $lastInput,
+        array $inputArray,
         Utility $utility
     ): string {
+        // 1. Validate the input using the existing helper
         if (!$this->isValidVocation($lastInput)) {
             return "CON [Invalid Vocation! Use letters/dashes only, 3-30 chars]\n\nPlease enter your Vocation:";
         }
 
-        $utility->saveInput($lastInput, $sessionId);
+        // 2. Extract the Name dynamically
+        // Since inputArray contains the full history (e.g., "*265#", "1", "Name"),
+        // the name is the last captured input *before* this current vocation input.
+        $allInputs = $utility->getSessionInputArray($sessionId); 
         
-        // Grab the name from the previous step position in the array index
-        $totalElements = count($inputArray);
-        $fullName = $inputArray[$totalElements - 2] ?? 'Unknown Member';
-        $vocation = $lastInput;
+        // Ensure we clean the inputs to get just the name
+        // Assuming your flow saves the name at the step before vocation
+        $fullName = !empty($allInputs) ? end($allInputs) : 'Unknown Member';
+        $vocation = trim($lastInput);
 
+        // 3. Save the vocation input to the DB trail
+        $utility->saveInput($vocation, $sessionId);
+
+        // 4. Call the registration API
+        // Ensure this returns true. Check your API error logs if this fails.
         $isRegistered = $utility->registerNewMember($fullName, $msisdn, $vocation);
-        
+
         if ($isRegistered) {
-            return "END Thank you for registering, {$fullName}.\nPlease redial the code to view your menu.";
+            $utility->setTemplevel($sessionId, "VerifyOtpState");
+            return "CON Registration initiated. An OTP has been sent. Please enter the OTP:";
         }
 
-        return "END System error during registration. Please try again later.";
+        return "END System error during registration. Please check logs for API failure.";
     }
 
     private function isValidVocation(string $vocation): bool
     {
         $vocation = trim($vocation);
-        return (bool) preg_match("/^[a-zA-Z\s\-]{3,30}$/", $vocation);
+        return (bool) preg_match('/^[a-zA-Z\s\-]{3,30}$/', $vocation);
     }
 }

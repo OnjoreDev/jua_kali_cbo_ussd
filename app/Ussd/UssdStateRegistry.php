@@ -28,7 +28,7 @@ class UssdStateRegistry
         // -------------------------------------------------------------
         // 3. BALANCE CHECKING STATES
         // -------------------------------------------------------------
-       'BalanceMenu'              => \App\Ussd\States\BalanceMenuState::class,
+        'BalanceMenu'              => \App\Ussd\States\BalanceMenuState::class,
         'MainWalletDirectAction'   => \App\Ussd\States\MainWalletDirectActionState::class,
         'MainWalletDepositCapture' => \App\Ussd\States\MainWalletDepositCaptureState::class,
         'GenericBackRoute'         => \App\Ussd\States\GenericBackRouteState::class,
@@ -46,7 +46,7 @@ class UssdStateRegistry
         'ChamaPointsMenu'         => \App\Ussd\States\ChamaPointsMenuState::class,
         'ExecutePointsRedemption' => \App\Ussd\States\ExecutePointsRedemptionState::class,
 
-       // -------------------------------------------------------------
+        // -------------------------------------------------------------
         // 6. LOAN REQUEST STATES
         // -------------------------------------------------------------
         'CaptureLoanAmount'       => \App\Ussd\States\CaptureLoanAmountState::class,
@@ -55,6 +55,16 @@ class UssdStateRegistry
         // 7. WITHDRAWAL STATES
         // -------------------------------------------------------------
         'CaptureWithdrawalAmount' => \App\Ussd\States\CaptureWithdrawalAmountState::class,
+        //--------------------------------------------------------------
+        //8. LOGIN STATE
+        //----------------------------------------------------------------
+        'LoginState' => \App\Ussd\States\LoginState::class,
+
+        //------------------------------------------------------------------
+        //9. OTP AND SET PIN
+        //------------------------------------------------------------------- 
+        'VerifyOtpState' => \App\Ussd\States\VerifyOtpState::class,
+        'SetPinState'    => \App\Ussd\States\SetPinState::class,
     ];
 
     /**
