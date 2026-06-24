@@ -132,4 +132,39 @@ class Utility extends Model
         $response = $this->callApi('GET', '/session/get-inputs/' . urlencode($sessionId));
         return $response['inputs'] ?? [];
     }
+
+    public function getMemberbalances() {}
+
+
+    public function createWelfareClaim() {}
+
+
+    public function getWelfareClaimesList() {}
+
+
+    //hits the api endpoint to create a Loan
+    /**
+     * Hits the API endpoint to create a Loan request
+     */
+    public function createLoanRequest(string $msisdn, float $amount): bool
+    {
+        // The API route we created in routes.php was: 
+        // $loan->post('/request', [LoanController::class, 'requestLoan']);
+        // Note: The /api/v1 prefix is handled by callApi() internally or needs to be prepended
+
+        $response = $this->callApi('POST', '/loan/request', [
+            'phone'  => $msisdn,
+            'amount' => $amount
+        ]);
+
+        // Check if the API returned a success status
+        return isset($response['status']) && $response['status'] === 'success';
+    }
+
+    //will hit the api endpoint to get a member by their phone number
+    public function getMemberByPhone(string $phone): array
+    {
+        // The URL structure must match your routes.php definition
+        return $this->callApi('GET', '/member/find-by-phone/' . urlencode($phone));
+    }
 }

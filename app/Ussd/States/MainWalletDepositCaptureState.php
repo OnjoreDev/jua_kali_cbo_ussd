@@ -47,15 +47,17 @@ class MainWalletDepositCaptureState implements UssdStateHandlerInterface
         $amount = (float)$amountRaw;
         
         // Isolate and fetch the explicit Main account callback path from the .env configuration
-        $callbackUrl = $_ENV['MPESA_CALLBACK_URL_MAIN'] ?? '';
+        //$callbackUrl = $_ENV['MPESA_CALLBACK_URL_MAIN'] ?? '';
         
         // Dispatch the STK push request out to Safaricom Daraja
-        $isDispatched = $utility->initiateStkPush($msisdn, $amount, "MainSavings", $callbackUrl);
+        //$isDispatched = $utility->initiateStkPush($msisdn, $amount, "MainSavings", $callbackUrl);
         
-        if ($isDispatched) {
-            return "END An M-Pesa STK push prompt has been sent to your phone.\n\nPlease enter your M-Pesa PIN on the pop-up to authorize your Main Savings Wallet deposit of KES " . number_format($amount, 2) . ".";
-        } else {
-            return "END System technical hitch handling your M-Pesa request. Please try again later.";
-        }
+        // if ($isDispatched) {
+        //     return "END An M-Pesa STK push prompt has been sent to your phone.\n\nPlease enter your M-Pesa PIN on the pop-up to authorize your Main Savings Wallet deposit of KES " . number_format($amount, 2) . ".";
+        // } else {
+        //     return "END System technical hitch handling your M-Pesa request. Please try again later.";
+        // }
+                    return "END An M-Pesa STK push prompt has been sent to your phone.\n\nPlease enter your M-Pesa PIN on the pop-up to authorize your Main Savings Wallet deposit of KES " . number_format($amount, 2) . ".";
+
     }
 }

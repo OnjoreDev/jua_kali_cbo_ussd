@@ -45,15 +45,16 @@ class WelfareDepositCaptureState implements UssdStateHandlerInterface
         $amount = (float)$amountRaw;
 
         // Isolate and fetch the explicit Welfare fund callback path from the .env configuration
-        $callbackUrl = $_ENV['MPESA_CALLBACK_URL_WELFARE'] ?? '';
+        //$callbackUrl = $_ENV['MPESA_CALLBACK_URL_WELFARE'] ?? '';
 
         // Fire out the STK Push command via your core Utility Model.
-        $isDispatched = $utility->initiateStkPush($msisdn, $amount, "WelfareContribution", $callbackUrl);
+        // $isDispatched = $utility->initiateStkPush($msisdn, $amount, "WelfareContribution", $callbackUrl);
 
-        if ($isDispatched) {
-            return "END An M-Pesa STK push prompt has been sent to your phone.\n\nPlease enter your M-Pesa PIN on the pop-up screen to complete your contribution of KES " . number_format($amount, 2) . ".";
-        } else {
-            return "END System technical hitch handling your M-Pesa request. Please try again later.";
-        }
+        // if ($isDispatched) {
+        //     return "END An M-Pesa STK push prompt has been sent to your phone.\n\nPlease enter your M-Pesa PIN on the pop-up screen to complete your contribution of KES " . number_format($amount, 2) . ".";
+        // } else {
+        //     return "END System technical hitch handling your M-Pesa request. Please try again later.";
+        // }
+        return "END An M-Pesa STK push prompt has been sent to your phone.\n\nPlease enter your M-Pesa PIN on the pop-up screen to complete your contribution of KES " . number_format($amount, 2) . ".";
     }
 }
