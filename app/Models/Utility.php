@@ -133,14 +133,7 @@ class Utility extends Model
         return $response['inputs'] ?? [];
     }
 
-    public function getMemberbalances() {}
-
-
-    public function createWelfareClaim() {}
-
-
-    public function getWelfareClaimesList() {}
-
+    
 
     //hits the api endpoint to create a Loan
     /**
@@ -166,5 +159,58 @@ class Utility extends Model
     {
         // The URL structure must match your routes.php definition
         return $this->callApi('GET', '/member/find-by-phone/' . urlencode($phone));
+    }
+
+    // Fetch list of claims for a specific member
+    // In App\Models\Utility.php
+
+    /**
+     * Fetch list of claims for a specific member
+     * The route defined is: $group->group('/welfare', ...) inside /api/v1
+     * Full URL: {BASE_URL}/welfare/claims
+     */
+    public function getWelfareClaimsList(string $phone): array
+    {
+        // The endpoint string here is relative to the /api/v1 base
+        $response = $this->callApi('GET', '/welfare/claims?phone=' . urlencode($phone));
+
+        return $response['claims'] ?? [];
+    }
+
+    /**
+     * Create a new welfare claim
+     * Full URL: {BASE_URL}/welfare/claim
+     */
+    public function createWelfareClaim(string $phone, string $claimType): bool
+    {
+        $response = $this->callApi('POST', '/welfare/claim', [
+            'phone' => $phone,
+            'claim_type' => $claimType
+        ]);
+
+        return isset($response['status']) && $response['status'] === 'success';
+    }
+
+    /**
+     * Triggers a direct deposit into the member's welfare wallet.
+     * * @param string $phone
+     * @param float $amount
+     * @return bool
+     */
+    public function depositToWelfare(string $phone, float $amount): bool
+    {
+        $response = $this->callApi('POST', '/welfare/deposit', [
+            'phone'  => $phone,
+            'amount' => $amount
+        ]);
+
+        // Returns true only if the API returned status: success
+        return isset($response['status']) && $response['status'] === 'success';
+    }
+    // Fetch member wallet balances (used by WelfareMenuState to find Welfare Balance)
+    public function getMemberBalances(string $phone): array
+    {
+        $response = $this->callApi('GET', '/member/balances?phone=' . urlencode($phone));
+        return $response['wallets'] ?? [];
     }
 }

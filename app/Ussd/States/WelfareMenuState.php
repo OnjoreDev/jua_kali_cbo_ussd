@@ -42,12 +42,12 @@ class WelfareMenuState implements UssdStateHandlerInterface
             case "1":
                 $utility->saveInput($lastInput, $sessionId);
                 $utility->setTemplevel($sessionId, "WelfareDepositCapture");
-                return "CON Enter Amount to Deposit to Welfare Wallet:\n00. Back";
+                return "CON Enter Amount to Deposit to Welfare Wallet:\n0. Back";
 
             case "2":
                 $utility->saveInput($lastInput, $sessionId);
                 $utility->setTemplevel($sessionId, "WelfareClaimTypeSelect");
-                return "CON Select Welfare Claim Type:\n1. Medical Benefit\n2. Bereavement Support\n00. Back";
+                return "CON Select Welfare Claim Type:\n1. Medical Benefit\n2. Bereavement Support\n0. Back";
 
             case "3":
                 $utility->saveInput($lastInput, $sessionId);
@@ -93,14 +93,14 @@ class WelfareMenuState implements UssdStateHandlerInterface
                     }
                 }
                 
-                $ussdResponse .= "\n00. Back";
+                $ussdResponse .= "\n0. Back";
                 
                 // Point to your generic back route state for the NEXT user interaction
                 $utility->setTemplevel($sessionId, "GenericBackRoute");
                 return $ussdResponse;
 
             default:
-                return "CON [Invalid Choice!]\n\nWelfare Hub:\n1. Deposit\n2. Claim\n3. Status\n00. Back";
+                return "CON [Invalid Choice!]\n\nWelfare Hub:\n1. Deposit\n2. Claim\n3. Status\n0. Back";
         }
     }
 }

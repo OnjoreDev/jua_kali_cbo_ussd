@@ -62,11 +62,11 @@ class CaptureWithdrawalAmountState implements UssdStateHandlerInterface
 
         // 4. Process the validated withdrawal request
         $utility->saveInput($lastInput, $sessionId);
-        $isProcessed = $utility->processWithdrawal($msisdn, $amount);
+        //$isProcessed = $utility->processWithdrawal($msisdn, $amount);
 
-        if ($isProcessed) {
-            return "END Withdrawal request of KES " . number_format($amount, 2) . " has been received.\nFunds will be sent via M-Pesa shortly.";
-        } 
+        // if ($isProcessed) {
+        //     return "END Withdrawal request of KES " . number_format($amount, 2) . " has been received.\nFunds will be sent via M-Pesa shortly.";
+        // } 
         
         return "END System error processing your withdrawal. Please try again later.";
     }
