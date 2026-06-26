@@ -181,14 +181,17 @@ class Utility extends Model
      * Create a new welfare claim
      * Full URL: {BASE_URL}/welfare/claim
      */
-    public function createWelfareClaim(string $phone, string $claimType): bool
+    // In App\Models\Utility.php
+
+    public function createWelfareClaim(string $phone, string $claimType): array
     {
         $response = $this->callApi('POST', '/welfare/claim', [
-            'phone' => $phone,
+            'phone'      => $phone,
             'claim_type' => $claimType
         ]);
 
-        return isset($response['status']) && $response['status'] === 'success';
+        // Return the whole response so we can read the message
+        return $response;
     }
 
     /**

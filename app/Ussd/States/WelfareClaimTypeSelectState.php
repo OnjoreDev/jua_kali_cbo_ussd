@@ -10,10 +10,10 @@ use App\Models\Utility;
 class WelfareClaimTypeSelectState implements UssdStateHandlerInterface
 {
     public function handle(
-        string $sessionId, 
-        string $msisdn, 
-        string $lastInput, 
-        array $inputArray, 
+        string $sessionId,
+        string $msisdn,
+        string $lastInput,
+        array $inputArray,
         Utility $utility
     ): string {
         if ($lastInput === "0" || $lastInput === "00") {
@@ -22,17 +22,26 @@ class WelfareClaimTypeSelectState implements UssdStateHandlerInterface
             return "CON Welfare Hub:\n1. Deposit\n2. Claim\n3. Status\n0. Back";
         }
 
+        //check the selected option 1 is for medical 2 is for bereavement
+        // In App\Ussd\States\WelfareClaimTypeSelectState.php
+
         if ($lastInput === "1" || $lastInput === "2") {
-            $utility->saveInput($lastInput, $sessionId);
             $claimType = ($lastInput === "1") ? "medical" : "bereavement";
 
-            $isClaimed = $utility->createWelfareClaim($msisdn, $claimType);
-            
-            if ($isClaimed) {
-                return "END Claim submitted successfully. Tracking confirmation sent via SMS.";
-            } else {
-                return "END System connection error filing claim. Please try later.";
+            // Call the updated method
+            $response = $utility->createWelfareClaim($msisdn, $claimType);
+
+            if (isset($response['status']) && $response['status'] === 'success') {
+                return "END Claim submitted successfully. Tracking: {$response['tracking']}. SMS sent.";
             }
+
+            // Check if it's the "Already active" error
+            if (isset($response['message']) && str_contains($response['message'], 'active welfare claim')) {
+                return "END You already have an active welfare claim. Please wait for its resolution.";
+            }
+
+            // Otherwise, it's a generic system error
+            return "END System connection error. Please try again later.";
         }
 
         return "CON [Invalid Choice!]\n\nSelect Welfare Claim Type:\n1. Medical Benefit\n2. Bereavement Support\n0. Back";
