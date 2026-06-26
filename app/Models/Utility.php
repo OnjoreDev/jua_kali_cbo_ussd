@@ -210,6 +210,25 @@ class Utility extends Model
         // Returns true only if the API returned status: success
         return isset($response['status']) && $response['status'] === 'success';
     }
+
+    // Add this to App\Models\Utility.php
+
+    // Add this to App\Models\Utility.php
+
+    /**
+     * Triggers a direct deposit into the member's Main Wallet (ID 1).
+     */
+    public function depositToMain(int $memberId, int $amount): bool
+    {
+        // Ensure this matches the endpoint defined in your routes
+        $response = $this->callApi('POST', '/main/deposit', [
+            'member_id' => $memberId,
+            'amount'    => $amount
+        ]);
+
+        // Return true only if the API returned status: success
+        return isset($response['status']) && $response['status'] === 'success';
+    }
     // Fetch member wallet balances (used by WelfareMenuState to find Welfare Balance)
     public function getMemberBalances(string $phone): array
     {
