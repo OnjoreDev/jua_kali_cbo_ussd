@@ -1,6 +1,6 @@
 <?php
 
-declare(declare_types=1);
+declare(strict_types=1);
 
 namespace App\Ussd\States;
 
@@ -30,9 +30,7 @@ class MemberMainMenuState implements UssdStateHandlerInterface
         array $inputArray,
         Utility $utility
     ): string {
-
-        // FIX: If this is a fresh session dial or entry reset, bypass validation 
-        // and instantly render the clean main menu dashboard.
+        // Handle session entry or navigation reset
         if ($lastInput === "" || $lastInput === "39" || $lastInput === "00") {
             return $this->renderMenuText();
         }
@@ -41,7 +39,7 @@ class MemberMainMenuState implements UssdStateHandlerInterface
             case "1":
                 $utility->saveInput($lastInput, $sessionId);
                 $utility->setTemplevel($sessionId, "BalanceMenu");
-                return "CON View Balance for:\n1. Main Wallet\n2. Welfare Wallet\n3. Loan Balance\n0. Back";
+                return "CON View Balance for:\n1. Main Wallet\n2. Welfare Wallet\n3. Chama Points Balance\n0. Back";
 
             case "2":
                 $utility->saveInput($lastInput, $sessionId);
@@ -50,20 +48,23 @@ class MemberMainMenuState implements UssdStateHandlerInterface
 
             case "3":
                 $utility->saveInput($lastInput, $sessionId);
-                // $wallets = $utility->getMemberBalances($msisdn);
-
+                
+                // Fetch wallet data to check balance for ID 3 (Chama Points)
+                $wallets = $utility->getMemberBalances($msisdn);
                 $points = 0.0;
-                // if (is_array($wallets)) {
-                //     foreach ($wallets as $w) {
-                //         if ((int)$w['wallet_type_id'] === 3) {
-                //             $points = (float)$w['balance'];
-                //         }
-                //     }
-                // }
+                
+                if (is_array($wallets)) {
+                    foreach ($wallets as $w) {
+                        if ((int)$w['wallet_type_id'] === 3) {
+                            $points = (float)$w['balance'];
+                            break;
+                        }
+                    }
+                }
 
+                // If balance is 0, keep user in the main menu or inform them
                 if ($points <= 0) {
-                    $utility->setTemplevel($sessionId, "MemberMainMenu");
-                    return "CON You have 0 Chama Points. You cannot access the redemption menu.\n0. Back";
+                    return "CON You have 0 Chama Points.\n0. Back";
                 }
 
                 $utility->setTemplevel($sessionId, "ChamaPointsMenu");
@@ -79,26 +80,22 @@ class MemberMainMenuState implements UssdStateHandlerInterface
                 $utility->setTemplevel($sessionId, "CaptureWithdrawalAmount");
                 return "CON Enter Amount to Withdraw from Main Wallet:\n0. Back";
 
-                // In App\Ussd\States\MemberMainMenuState.php
-
             case "6":
                 $utility->saveInput($lastInput, $sessionId);
 
-                // 1. Perform the pre-flight registration check first
                 if (!$utility->isMemberRegistered($msisdn)) {
                     return "END You are not a registered member. Please register to access Customer Care.";
                 }
 
-                // 2. Trigger the SMS via the API
                 $success = $utility->requestCustomerCareSms($msisdn);
+                return $success 
+                    ? "END Support details have been sent to your phone. Thank you." 
+                    : "END Sorry, we could not process your request at this time.";
 
-                if ($success) {
-                    return "END Support details have been sent to your phone. Thank you.";
-                }
-
-                return "END Sorry, we could not process your request at this time. Please try again.";
+            case "0":
+                return $this->renderMenuText();
+                        
             default:
-                // Prepend error warning prefix only if they actually input something invalid
                 return "CON [Invalid Choice!]\n" . $this->renderMenuText();
         }
     }
