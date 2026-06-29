@@ -200,14 +200,32 @@ class Utility extends Model
      * @param float $amount
      * @return bool
      */
-    public function depositToWelfare(string $phone, float $amount): bool
+    // public function depositToWelfare(string $phone, float $amount): bool
+    // {
+    //     $response = $this->callApi('POST', '/welfare/deposit', [
+    //         'phone'  => $phone,
+    //         'amount' => $amount
+    //     ]);
+
+    //     // Returns true only if the API returned status: success
+    //     return isset($response['status']) && $response['status'] === 'success';
+    // }
+    /**
+     * Triggers a direct deposit into the member's welfare wallet (Wallet ID 2).
+     * * @param string $phone    The active user phone number initiating the request
+     * @param float $amount    The target contribution value input by the user
+     * @param int $memberId    The resolved database ID of the member
+     * @return bool            True if the STK push was successfully initialized
+     */
+    public function depositToWelfare(string $phone, float $amount, int $memberId): bool
     {
         $response = $this->callApi('POST', '/welfare/deposit', [
-            'phone'  => $phone,
-            'amount' => $amount
+            'phone'     => $phone,
+            'amount'    => $amount,
+            'member_id' => $memberId
         ]);
 
-        // Returns true only if the API returned status: success
+        // Returns true only if the backend controller launched the STK thread successfully
         return isset($response['status']) && $response['status'] === 'success';
     }
 
