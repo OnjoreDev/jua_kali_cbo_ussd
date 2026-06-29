@@ -236,15 +236,34 @@ class Utility extends Model
     /**
      * Triggers a direct deposit into the member's Main Wallet (ID 1).
      */
-    public function depositToMain(int $memberId, int $amount): bool
+    // public function depositToMain(int $memberId, int $amount): bool
+    // {
+    //     // Ensure this matches the endpoint defined in your routes
+    //     $response = $this->callApi('POST', '/main/deposit', [
+    //         'member_id' => $memberId,
+    //         'amount'    => $amount
+    //     ]);
+
+    //     // Return true only if the API returned status: success
+    //     return isset($response['status']) && $response['status'] === 'success';
+    // }
+    /**
+     * Triggers a direct deposit into the member's Main Wallet (ID 1).
+     * Replaced an atomic credit call with a secure async M-Pesa STK Push flow trigger.
+     * * @param string $phone    The active user phone number initiating the request
+     * @param float $amount    The target contribution value input by the user
+     * @param int $memberId    The resolved database ID of the member
+     * @return bool            True if the backend controller successfully launched the STK push
+     */
+    public function depositToMain(string $phone, float $amount, int $memberId): bool
     {
-        // Ensure this matches the endpoint defined in your routes
         $response = $this->callApi('POST', '/main/deposit', [
-            'member_id' => $memberId,
-            'amount'    => $amount
+            'phone'     => $phone,
+            'amount'    => $amount,
+            'member_id' => $memberId
         ]);
 
-        // Return true only if the API returned status: success
+        // Returns true only if the backend controller successfully launched the STK thread successfully
         return isset($response['status']) && $response['status'] === 'success';
     }
     // Fetch member wallet balances (used by WelfareMenuState to find Welfare Balance)
