@@ -10,7 +10,7 @@ use App\Models\Utility;
 class CaptureVocationState implements UssdStateHandlerInterface
 {
     /**
-     * Captures vocation, registers the member, and transitions to VerifyOtpState.
+     * Captures vocation, registers the member, and ends the session for SMS OTP receipt.
      */
     public function handle(
         string $sessionId,
@@ -19,39 +19,45 @@ class CaptureVocationState implements UssdStateHandlerInterface
         array $inputArray,
         Utility $utility
     ): string {
-        // 1. Validate the input using the existing helper
+        // 1. Validate the input
         if (!$this->isValidVocation($lastInput)) {
             return "CON [Invalid Vocation! Use letters/dashes only, 3-30 chars]\n\nPlease enter your Vocation:";
         }
 
-        // 2. Extract the Name dynamically
-        // Since inputArray contains the full history (e.g., "*265#", "1", "Name"),
-        // the name is the last captured input *before* this current vocation input.
+        // 2. Extract the Name dynamically from the DB history trail
         $allInputs = $utility->getSessionInputArray($sessionId); 
-        
-        // Ensure we clean the inputs to get just the name
-        // Assuming your flow saves the name at the step before vocation
         $fullName = !empty($allInputs) ? end($allInputs) : 'Unknown Member';
         $vocation = trim($lastInput);
 
         // 3. Save the vocation input to the DB trail
         $utility->saveInput($vocation, $sessionId);
 
-        // 4. Call the registration API
-        // Ensure this returns true. Check your API error logs if this fails.
-        $isRegistered = $utility->registerNewMember($fullName, $msisdn, $vocation);
+        // 4. Call the registration API endpoint securely using callApi
+        $response = $utility->callApi('POST', '/auth/register', [
+            'name'     => $fullName,
+            'phone'    => $msisdn,
+            'vocation' => $vocation
+        ]);
 
-        if ($isRegistered) {
-            $utility->setTemplevel($sessionId, "VerifyOtpState");
-            return "CON Registration initiated. An OTP has been sent. Please enter the OTP:";
+        // 5. Check if the API registration succeeded
+        if (isset($response['status']) && $response['status'] === 'success') {
+            // Clear or park the state safely to InitialGateway so the next dial starts fresh
+            $utility->setTemplevel($sessionId, "InitialGateway");
+            
+            return "END Registration initiated successfully! An OTP has been sent via SMS. Please redial the code once received to complete setup.";
         }
 
-        return "END System error during registration. Please check logs for API failure.";
+        // 6. Handle backend validation or duplicate phone failure gracefully
+        $errorMessage = $response['message'] ?? 'System error during registration.';
+        return "END " . $errorMessage;
     }
 
     private function isValidVocation(string $vocation): bool
     {
         $vocation = trim($vocation);
-        return (bool) preg_match('/^[a-zA-Z\s\-]{3,30}$/', $vocation);
+        if (strlen($vocation) < 3 || strlen($vocation) > 30) {
+            return false;
+        }
+        return (bool)preg_match('/^[a-zA-Z\s\-]+$/', $vocation);
     }
 }

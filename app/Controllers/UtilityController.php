@@ -31,7 +31,7 @@ class UtilityController extends Controller
         return $phone;
     }
 
-    public function __invoke(Request $request, Response $response): Response
+ public function __invoke(Request $request, Response $response): Response
     {
         $queryParams = $request->getQueryParams();
         $SESSIONID = $queryParams["SESSIONID"] ?? '';
@@ -48,10 +48,14 @@ class UtilityController extends Controller
             return $response->withHeader('Content-Type', 'text/plain');
         }
 
+        // Fetch the current session tracking state level from the DB/API
+        $currentLevel = $this->utility->getTemplevel($SESSIONID);
+
         /**
          * 1. INITIAL SCREEN HANDLING & GATEKEEPER
+         * Catches fresh sessions, drops, network resets, or neutral entry fallbacks
          */
-        if ($INPUT === "" || $lastInput === "39" || $lastInput === "00") {
+        if ($INPUT === "" || $lastInput === "39" || $lastInput === "00" || $currentLevel === "InitialGateway") {
             if ($lastInput !== "00") {
                 $this->utility->callApi('POST', '/session/create', [
                     'session_id' => $SESSIONID,
@@ -60,39 +64,55 @@ class UtilityController extends Controller
                 ]);
             }
 
-            if ($this->utility->isMemberRegistered($MSISDN)) {
-                $this->utility->setTemplevel($SESSIONID, "LoginState");
-                $currentState = $this->registry->getState("LoginState");
-                $ussdResponse = $currentState->handle($SESSIONID, $MSISDN, "", [], $this->utility);
-            } else {
+            // Look up the member profile via your public endpoint
+            $memberData = $this->utility->callApi('GET', '/member/find-by-phone/' . urlencode($MSISDN));
+
+            // Check if the member profile exists in the database
+            if (!empty($memberData) && !isset($memberData['status'])) {
+                
+                // PART 2 REGISTRATION: Account exists, but PIN has not been configured yet
+                if (empty($memberData['pin_hash'])) {
+                    $this->utility->setTemplevel($SESSIONID, "VerifyOtpState");
+                    $currentState = $this->registry->getState("VerifyOtpState");
+                    // Pass empty string as input so VerifyOtpState displays its initial input prompt
+                    $ussdResponse = $currentState->handle($SESSIONID, $MSISDN, "", [], $this->utility);
+                } 
+                
+                // REGULAR LOGIN: User is fully registered with a security PIN hash
+                else {
+                    $this->utility->setTemplevel($SESSIONID, "LoginState");
+                    $currentState = $this->registry->getState("LoginState");
+                    $ussdResponse = $currentState->handle($SESSIONID, $MSISDN, "", [], $this->utility);
+                }
+            } 
+            
+            // NEW REGISTRATION: Phone number not found in the members table
+            else {
                 $this->utility->setTemplevel($SESSIONID, "PromptRegistration");
-                $ussdResponse = "CON Welcome! You do not have an account.\nPress 1 to register.";
+                $ussdResponse = "CON Welcome to Jua Kali CBO!\n1. Register";
             }
         }
         /**
-         * 2. DYNAMIC STATE ROUTING (With Navigation Filtering)
+         * 2. DYNAMIC STATE ROUTING
          */
         else {
-            $currentLevel = $this->utility->getTemplevel($SESSIONID);
-
-            // NAVIGATION FILTER: Intercept triggers before they reach state logic
+            // NAVIGATION FILTER: Intercept global back/menu navigation codes safely
             if ($lastInput === "39" || $lastInput === "00") {
                 $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
                 $currentState = $this->registry->getState("MemberMainMenu");
                 $ussdResponse = $currentState->handle($SESSIONID, $MSISDN, "", [], $this->utility);
             } 
-            // SPECIAL CASE: Registration trigger
+            // REGISTRATION SHORTCUT: Handle explicit option selection from introductory screen
             elseif ($currentLevel === "PromptRegistration" && $lastInput === "1") {
                 $this->utility->setTemplevel($SESSIONID, "CaptureName");
                 $ussdResponse = "CON Please enter your Full Name:";
             } 
-            // STANDARD STATE PROCESSING
+            // STANDARD OBJECT-ORIENTED STATE PROCESSING
             else {
                 try {
                     $currentState = $this->registry->getState($currentLevel);
                     $ussdResponse = $currentState->handle($SESSIONID, $MSISDN, $lastInput, $inputArray, $this->utility);
                 } catch (\RuntimeException $e) {
-                    // Preserved your logger usage
                     if (property_exists($this, 'logger')) {
                         $this->logger->error("USSD State Router Error", ['message' => $e->getMessage()]);
                     }

@@ -61,7 +61,7 @@ class Utility extends Model
     {
         // Fetch the current level from the Slim API
         $response = $this->callApi('GET', '/session/get-level/' . urlencode($sessionId));
-        return $response['level'] ?? 'MemberMainMenu'; // Default to Main Menu if unknown
+        return $response['level'] ?? 'InitialGateway'; // Changed from 'MemberMainMenu'
     }
 
     public function setTemplevel(string $sessionId, string $level): void
