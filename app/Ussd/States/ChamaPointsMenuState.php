@@ -16,7 +16,7 @@ class ChamaPointsMenuState implements UssdStateHandlerInterface
         array $inputArray, 
         Utility $utility
     ): string {
-        // Handle Back Navigation cleanly to return to the parent portal dashboard
+        // Handle Back Navigation
         if ($lastInput === "0" || $lastInput === "00") {
             $utility->saveInput($lastInput, $sessionId);
             $utility->setTemplevel($sessionId, "MemberMainMenu");
@@ -25,27 +25,17 @@ class ChamaPointsMenuState implements UssdStateHandlerInterface
 
         switch ($lastInput) {
             case "1": 
-                // DO NOT save input 1 here to match original controller behavior
-                $wallets = $utility->getMemberBalances($msisdn);
+                // Uses the new utility method which triggers the API -> Controller -> SMS flow
+                $points = $utility->getChamaPointsBalance($msisdn);
                 
-                $points = 0.0;
-                if (is_array($wallets)) {
-                    foreach ($wallets as $w) {
-                        if ((int)$w['wallet_type_id'] === 3) {
-                            $points = (float)$w['balance'];
-                        }
-                    }
-                }
-                
-                // Keep them inside this state context so pressing '0' functions as a back button
                 $utility->setTemplevel($sessionId, "ChamaPointsMenu");
-                return "CON Balance: {$points} Points \n0. Back";
+                return "CON Balance: {$points} Points. An SMS with details has been sent to you.\n0. Back";
 
             case "2": 
-                // Option 2 saves the choice string to step into input capture
+                // Moves to the next state to capture redemption amount
                 $utility->saveInput($lastInput, $sessionId);
                 $utility->setTemplevel($sessionId, "ExecutePointsRedemption");
-                return "CON Enter Points to redeem:\n0. Back";
+                return "CON Enter Points to redeem (Min 10):\n0. Back";
 
             default:
                 return "CON [Invalid Option!]\n\nChama Points Hub:\n1. View Points Balance\n2. Redeem Points\n0. Back";

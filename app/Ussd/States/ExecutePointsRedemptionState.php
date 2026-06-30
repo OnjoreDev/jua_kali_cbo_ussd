@@ -16,53 +16,28 @@ class ExecutePointsRedemptionState implements UssdStateHandlerInterface
         array $inputArray, 
         Utility $utility
     ): string {
+        // Handle Back Navigation
         if ($lastInput === "0" || $lastInput === "00") {
-            $utility->saveInput($lastInput, $sessionId);
             $utility->setTemplevel($sessionId, "ChamaPointsMenu");
             return "CON Chama Points Hub:\n1. View Points Balance\n2. Redeem Points\n0. Back";
         }
 
-        // Validate numeric inputs
-        if (!is_numeric($lastInput) || (float)$lastInput <= 0) {
-            return "CON [Invalid Input! Please specify a positive number of points]\n\nEnter Points to redeem:";
+        // Validate numeric input
+        $pointsToRedeem = (int)$lastInput;
+        if ($pointsToRedeem < 10) {
+            return "CON [Invalid Input!]\nMinimum redemption is 10 points.\n\nEnter points to redeem:\n0. Back";
         }
 
-        $utility->saveInput($lastInput, $sessionId);
-        $pointsToRedeem = floor((float)$lastInput);
-        $wallets = $utility->getMemberBalances($msisdn);
+        // Call the new Utility method which hits the API
+        $result = $utility->redeemChamaPoints($msisdn, $pointsToRedeem);
 
-        $currentPoints = 0.0;
-        if (is_array($wallets)) {
-            foreach ($wallets as $w) {
-                if ((int)$w['wallet_type_id'] === 3) {
-                    $currentPoints = (float)$w['balance'];
-                }
-            }
+        if ($result['success']) {
+            // Success response
+            $utility->setTemplevel($sessionId, "MemberMainMenu");
+            return "END " . $result['message'] . ". You will receive an SMS confirmation shortly.";
+        } else {
+            // Failure response (e.g., insufficient points)
+            return "CON Error: " . $result['message'] . "\nEnter a valid number of points:\n0. Back";
         }
-
-        // Balance Check Validation
-        if ($pointsToRedeem > $currentPoints) {
-            return "CON [Redemption failed! You have {$currentPoints} points]\n\n0. Go back";
-        }
-
-        // 1 Point = KES 100 conversion rule
-        $cashValue = $pointsToRedeem * 100;
-
-        // Generate tracking reference code
-        $sharedRef = strtoupper(bin2hex(random_bytes(4)));
-
-        // Execute ledger entries in database via model methods
-        $utility->logDisbursement($msisdn, 3, $pointsToRedeem, "Points redemption swap", "DSB-PTS" . $sharedRef);
-        $utility->logReceipt($msisdn, 1, $cashValue, "Cash swap from points conversion", "RCP-PTS" . $sharedRef);
-
-        $remainingPoints = $currentPoints - $pointsToRedeem;
-
-        // Dispatch outbound confirmation SMS
-        $smsMessage = "Confirmed: You have successfully redeemed {$pointsToRedeem} Chama Points for KES " . number_format($cashValue, 2) . ". Your remaining balance is {$remainingPoints} Points.";
-        $utility->sendSMS($msisdn, $smsMessage);
-
-        return "END Conversion Successful!\n"
-            . "Added KES " . number_format($cashValue, 2) . " to your Main Wallet.\n"
-            . "Remaining Balance: {$remainingPoints} Points.";
     }
 }

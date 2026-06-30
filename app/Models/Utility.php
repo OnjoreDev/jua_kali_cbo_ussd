@@ -272,4 +272,30 @@ class Utility extends Model
         $response = $this->callApi('GET', '/member/balances?phone=' . urlencode($phone));
         return $response['wallets'] ?? [];
     }
+
+    //Chama point client functions
+    public function getChamaPointsBalance(string $msisdn): int
+    {
+        $member = $this->getMemberByPhone($msisdn);
+        if (!$member || !isset($member['id'])) return 0;
+        $response = $this->callApi('GET', '/chama/points/balance/' . $member['id']);
+        return (int)($response['balance'] ?? 0);
+    }
+
+    public function redeemChamaPoints(string $msisdn, int $points): array
+    {
+        $member = $this->getMemberByPhone($msisdn);
+        if (!$member || !isset($member['id'])) {
+            return ['success' => false, 'message' => 'Member not found.'];
+        }
+        $response = $this->callApi('POST', '/chama/points/redeem', [
+            'member_id' => $member['id'],
+            'points'    => $points
+        ]);
+        return [
+            'success' => isset($response['status']) && $response['status'] === 'success',
+            'message' => $response['message'] ?? 'Redemption request processed.'
+        ];
+    }
+    
 }

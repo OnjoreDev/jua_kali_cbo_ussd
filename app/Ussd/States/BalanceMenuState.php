@@ -32,7 +32,7 @@ class BalanceMenuState implements UssdStateHandlerInterface
 
         // 3. Validate Selection
         if (!in_array($lastInput, ["1", "2", "3"], true)) {
-            return "CON [Invalid Selection!]\n\nSelect Account to Check Balance:\n1. Main Wallet\n2. Welfare Wallet\n3. Chama Points\n00. Back";
+            return "CON [Invalid Selection!]\n\nSelect Account to Check Balance:\n1. Main Wallet\n2. Welfare Wallet\n3. Chama Points\n0. Back";
         }
 
         $utility->saveInput($lastInput, $sessionId);
@@ -67,11 +67,11 @@ class BalanceMenuState implements UssdStateHandlerInterface
         // Main Wallet (ID 1) allows deposits
         if ($lastInput === "1") { 
             $utility->setTemplevel($sessionId, "MainWalletDirectAction");
-            return "CON {$message}\n1. Make Deposit\n00. Back";
+            return "CON {$message}\n1. Make Deposit\n0. Back";
         } 
         
         // Other wallets currently display balance only
         $utility->setTemplevel($sessionId, "GenericBackRoute");
-        return "CON {$message}\n00. Back";
+        return "CON {$message}\n0. Back";
     }
 }

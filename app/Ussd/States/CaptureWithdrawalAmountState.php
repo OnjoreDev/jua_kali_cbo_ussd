@@ -31,7 +31,7 @@ class CaptureWithdrawalAmountState implements UssdStateHandlerInterface
         if (!in_array($currentDay, $allowedDays, true)) {
             return "END Withdrawal Restriction!\n"
                 . "Withdrawals can only be requested on the 1st, 3rd, 5th, or 15th of the month.\n"
-                . "Current Day: " . date('d-M-Y') . ". Access Denied.";
+                . "Current Day: " . date('d-M-Y') . ". Call 0797047166 for assistance";
         }
 
         // 2. Validate numeric input range (1 to 70,000)

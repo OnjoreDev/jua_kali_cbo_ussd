@@ -31,7 +31,7 @@ class UtilityController extends Controller
         return $phone;
     }
 
- public function __invoke(Request $request, Response $response): Response
+    public function __invoke(Request $request, Response $response): Response
     {
         $queryParams = $request->getQueryParams();
         $SESSIONID = $queryParams["SESSIONID"] ?? '';
@@ -69,23 +69,23 @@ class UtilityController extends Controller
 
             // Check if the member profile exists in the database
             if (!empty($memberData) && !isset($memberData['status'])) {
-                
+
                 // PART 2 REGISTRATION: Account exists, but PIN has not been configured yet
                 if (empty($memberData['pin_hash'])) {
                     $this->utility->setTemplevel($SESSIONID, "VerifyOtpState");
                     $currentState = $this->registry->getState("VerifyOtpState");
                     // Pass empty string as input so VerifyOtpState displays its initial input prompt
                     $ussdResponse = $currentState->handle($SESSIONID, $MSISDN, "", [], $this->utility);
-                } 
-                
+                }
+
                 // REGULAR LOGIN: User is fully registered with a security PIN hash
                 else {
                     $this->utility->setTemplevel($SESSIONID, "LoginState");
                     $currentState = $this->registry->getState("LoginState");
                     $ussdResponse = $currentState->handle($SESSIONID, $MSISDN, "", [], $this->utility);
                 }
-            } 
-            
+            }
+
             // NEW REGISTRATION: Phone number not found in the members table
             else {
                 $this->utility->setTemplevel($SESSIONID, "PromptRegistration");
@@ -101,12 +101,12 @@ class UtilityController extends Controller
                 $this->utility->setTemplevel($SESSIONID, "MemberMainMenu");
                 $currentState = $this->registry->getState("MemberMainMenu");
                 $ussdResponse = $currentState->handle($SESSIONID, $MSISDN, "", [], $this->utility);
-            } 
+            }
             // REGISTRATION SHORTCUT: Handle explicit option selection from introductory screen
             elseif ($currentLevel === "PromptRegistration" && $lastInput === "1") {
                 $this->utility->setTemplevel($SESSIONID, "CaptureName");
                 $ussdResponse = "CON Please enter your Full Name:";
-            } 
+            }
             // STANDARD OBJECT-ORIENTED STATE PROCESSING
             else {
                 try {

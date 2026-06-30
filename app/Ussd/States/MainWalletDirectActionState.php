@@ -22,7 +22,7 @@ class MainWalletDirectActionState implements UssdStateHandlerInterface
         array $inputArray, 
         Utility $utility
     ): string {
-        if ($lastInput === "00") {
+        if ($lastInput === "0") {
             $utility->saveInput($lastInput, $sessionId);
             $utility->setTemplevel($sessionId, "BalanceMenu");
             return "CON Select Account to Check Balance:\n1. Main Wallet\n2. Welfare Wallet\n3. Loan Wallet\n00. Back";
