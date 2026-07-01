@@ -13,17 +13,73 @@ namespace App\Models;
 class Utility extends Model
 {
 
-    public function callApi(string $method, string $endpoint, array $data = []): array
+    // public function callApi(string $method, string $endpoint, array $data = []): array
+    // {
+    //     $baseUrl = $_ENV['API_BASE_URL'] ?? 'http://localhost:8080/api/v1';
+    //     $token = $_ENV['USSD_CLIENT_TOKEN'] ?? '';
+
+    //     $ch = curl_init($baseUrl . $endpoint);
+    //     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    //     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+    //     curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    //         'Content-Type: application/json',
+    //         'Authorization: Bearer ' . $token,
+    //         'Accept: application/json'
+    //     ]);
+
+    //     if ($method === 'POST') {
+    //         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+    //     }
+
+    //     $response = curl_exec($ch);
+    //     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    //     $error = curl_error($ch);
+    //     curl_close($ch);
+
+    //     $decoded = json_decode($response, true);
+
+    //     // If an error occurred (HTTP 4xx/5xx), return the error message if available
+    //     if ($error || $httpCode >= 400) {
+    //         $this->logger->error("API Call Failed to {$endpoint} [HTTP {$httpCode}]: " . ($error ?: $response));
+    //         // Return the API error response if it exists, otherwise empty array
+    //         return is_array($decoded) ? $decoded : ['status' => 'error', 'message' => 'Network error or unreachable.'];
+    //     }
+
+    //     return is_array($decoded) ? $decoded : [];
+    // }
+    // In App\Models\Utility.php
+
+// In App\Models\Utility.php
+
+    /**
+     * Executes an API call to the backend with identity verification.
+     * * @param string $method POST, GET, etc.
+     * @param string $endpoint The API route.
+     * @param array $data Data to send as JSON.
+     * @param string $msisdn Optional phone number to resolve member_id for authorization.
+     * @return array The decoded JSON response.
+     */
+    public function callApi(string $method, string $endpoint, array $data = [], string $msisdn = ''): array
     {
         $baseUrl = $_ENV['API_BASE_URL'] ?? 'http://localhost:8080/api/v1';
         $token = $_ENV['USSD_CLIENT_TOKEN'] ?? '';
 
+        // Resolve member_id if a phone number is provided to satisfy AgentMiddleware
+        $memberId = 0;
+        if (!empty($msisdn)) {
+            $member = $this->getMemberByPhone($msisdn);
+            $memberId = $member['id'] ?? 0;
+        }
+
         $ch = curl_init($baseUrl . $endpoint);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+
+        // Authorization validates the server; X-Member-ID validates the agent/member role
         curl_setopt($ch, CURLOPT_HTTPHEADER, [
             'Content-Type: application/json',
             'Authorization: Bearer ' . $token,
+            'X-Member-ID: ' . $memberId,
             'Accept: application/json'
         ]);
 
@@ -38,16 +94,13 @@ class Utility extends Model
 
         $decoded = json_decode($response, true);
 
-        // If an error occurred (HTTP 4xx/5xx), return the error message if available
         if ($error || $httpCode >= 400) {
             $this->logger->error("API Call Failed to {$endpoint} [HTTP {$httpCode}]: " . ($error ?: $response));
-            // Return the API error response if it exists, otherwise empty array
-            return is_array($decoded) ? $decoded : ['status' => 'error', 'message' => 'Network error or unreachable.'];
+            return is_array($decoded) ? $decoded : ['status' => 'error', 'message' => 'Network error.'];
         }
 
         return is_array($decoded) ? $decoded : [];
-    }
-    // In App\Models\Utility.php
+    }  // In App\Models\Utility.php
 
     public function getCustomerCare(string $phone): array
     {
@@ -200,16 +253,7 @@ class Utility extends Model
      * @param float $amount
      * @return bool
      */
-    // public function depositToWelfare(string $phone, float $amount): bool
-    // {
-    //     $response = $this->callApi('POST', '/welfare/deposit', [
-    //         'phone'  => $phone,
-    //         'amount' => $amount
-    //     ]);
 
-    //     // Returns true only if the API returned status: success
-    //     return isset($response['status']) && $response['status'] === 'success';
-    // }
     /**
      * Triggers a direct deposit into the member's welfare wallet (Wallet ID 2).
      * * @param string $phone    The active user phone number initiating the request
@@ -273,29 +317,147 @@ class Utility extends Model
         return $response['wallets'] ?? [];
     }
 
-    //Chama point client functions
+    // Get the chama points balance
     public function getChamaPointsBalance(string $msisdn): int
     {
         $member = $this->getMemberByPhone($msisdn);
-        if (!$member || !isset($member['id'])) return 0;
+
+        // Log this to your logs so you can see if the lookup is failing
+        if (!$member || !isset($member['id'])) {
+            $this->logger->error("Balance fetch failed: Member not found for phone: " . $msisdn);
+            return 0;
+        }
+
         $response = $this->callApi('GET', '/chama/points/balance/' . $member['id']);
+
+        // Log the raw response to see if the API is returning 0 or failing to find the wallet
+        $this->logger->info("API Balance response for member " . $member['id'] . ": " . json_encode($response));
+
         return (int)($response['balance'] ?? 0);
     }
 
+    /**
+     * Redeems Chama Points.
+     * Logic: Sends absolute value to API; controller handles debit classification.
+     * * @param string $msisdn
+     * @param int $points
+     * @return array
+     */
     public function redeemChamaPoints(string $msisdn, int $points): array
     {
         $member = $this->getMemberByPhone($msisdn);
+
         if (!$member || !isset($member['id'])) {
             return ['success' => false, 'message' => 'Member not found.'];
         }
+
+        // Ensure we send a positive integer to the API
+        $positivePoints = abs($points);
+
         $response = $this->callApi('POST', '/chama/points/redeem', [
             'member_id' => $member['id'],
-            'points'    => $points
+            'points'    => $positivePoints
         ]);
+
         return [
             'success' => isset($response['status']) && $response['status'] === 'success',
-            'message' => $response['message'] ?? 'Redemption request processed.'
+            'message' => $response['message'] ?? 'Transaction processed successfully.'
         ];
     }
-    
+    /**
+     * Adds Chama Points to a member's wallet.
+     * This should only be accessible via Agent states.
+     * * @param string $msisdn The target member's phone number
+     * @param int $points    The number of points to add
+     * @return array         Response status and message
+     */
+    // public function addChamaPoints(string $msisdn, int $points): array
+    // {
+    //     $member = $this->getMemberByPhone($msisdn);
+
+    //     if (!$member || !isset($member['id'])) {
+    //         return ['success' => false, 'message' => 'Member not found.'];
+    //     }
+
+    //     // Call the API endpoint we secured with AgentMiddleware
+    //     $response = $this->callApi('POST', '/chama/points/add', [
+    //         'member_id' => $member['id'],
+    //         'points'    => $points
+    //     ]);
+
+    //     return [
+    //         'success' => isset($response['status']) && $response['status'] === 'success',
+    //         'message' => $response['message'] ?? 'Points added successfully.'
+    //     ];
+    // }
+    public function addChamaPoints(string $msisdn, int $points): array
+    {
+        // The callApi will now resolve the ID and add the X-Member-ID header
+        $response = $this->callApi('POST', '/chama/points/add', [
+            'member_id' => $this->getMemberByPhone($msisdn)['id'] ?? 0,
+            'points'    => $points
+        ], $msisdn); // Pass the msisdn here to trigger resolution
+
+        return [
+            'success' => isset($response['status']) && $response['status'] === 'success',
+            'message' => $response['message'] ?? 'Points added successfully.'
+        ];
+    }
+
+    // Add this to App\Models\Utility.php
+
+    /**
+     * Deducts 15 Chama Points from a member's wallet.
+     * @param string $msisdn
+     * @return array
+     */
+    // public function withdrawChamaPoints(string $msisdn): array
+    // {
+    //     $member = $this->getMemberByPhone($msisdn);
+
+    //     if (!$member || !isset($member['id'])) {
+    //         return ['success' => false, 'message' => 'Member not found.'];
+    //     }
+
+    //     // Call your new withdrawal endpoint with fixed points = 15
+    //     $response = $this->callApi('POST', '/chama/points/withdraw', [
+    //         'member_id' => $member['id'],
+    //         'points'    => 15
+    //     ]);
+
+    //     return [
+    //         'success' => isset($response['status']) && $response['status'] === 'success',
+    //         'message' => $response['message'] ?? 'Points withdrawn successfully.'
+    //     ];
+    // }
+    public function withdrawChamaPoints(string $msisdn): array
+    {
+        $member = $this->getMemberByPhone($msisdn);
+
+        if (!$member || !isset($member['id'])) {
+            return ['success' => false, 'message' => 'Member not found.'];
+        }
+
+        // Pass $msisdn as the 4th argument to callApi()
+        // This resolves the member_id and injects the X-Member-ID header
+        $response = $this->callApi('POST', '/chama/points/withdraw', [
+            'member_id' => $member['id'],
+            'points'    => 15
+        ], $msisdn);
+
+        return [
+            'success' => isset($response['status']) && $response['status'] === 'success',
+            'message' => $response['message'] ?? 'Points withdrawn successfully.'
+        ];
+    }
+    /**
+     * Checks if a member has a specific role by querying the API.
+     */
+
+    public function hasRole(string $phone, string $roleName): bool
+    {
+        // Ensure the endpoint matches your routes.php exactly
+        $response = $this->callApi('GET', '/member/has-role?phone=' . urlencode($phone) . '&role=' . urlencode($roleName));
+        return ($response['has_role'] ?? false) === true;
+    }
 }

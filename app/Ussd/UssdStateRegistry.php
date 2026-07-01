@@ -65,8 +65,17 @@ class UssdStateRegistry
         //------------------------------------------------------------------- 
         'VerifyOtpState' => \App\Ussd\States\VerifyOtpState::class,
         'SetPinState'    => \App\Ussd\States\SetPinState::class,
-    ];
 
+        // -------------------------------------------------------------
+        // 10. AGENT STATES
+        // -------------------------------------------------------------
+      // -------------------------------------------------------------
+        // 10. AGENT STATES
+        // -------------------------------------------------------------
+        'AgentMenu'                     => \App\Ussd\States\AgentMenuState::class,
+        'AgentCapturePhoneDeposit'      => \App\Ussd\States\AgentCapturePhoneDepositState::class,
+        'AgentCapturePhoneWithdrawal'     => \App\Ussd\States\AgentCapturePhoneWithdrawalState::class
+    ];  
     /**
      * Resolves and returns an instance of the requested state handler class.
      *

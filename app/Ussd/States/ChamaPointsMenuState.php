@@ -25,7 +25,7 @@ class ChamaPointsMenuState implements UssdStateHandlerInterface
 
         switch ($lastInput) {
             case "1": 
-                // Uses the new utility method which triggers the API -> Controller -> SMS flow
+                // Uses the utility method to fetch balance via API
                 $points = $utility->getChamaPointsBalance($msisdn);
                 
                 $utility->setTemplevel($sessionId, "ChamaPointsMenu");
@@ -35,7 +35,7 @@ class ChamaPointsMenuState implements UssdStateHandlerInterface
                 // Moves to the next state to capture redemption amount
                 $utility->saveInput($lastInput, $sessionId);
                 $utility->setTemplevel($sessionId, "ExecutePointsRedemption");
-                return "CON Enter Points to redeem (Min 10):\n0. Back";
+                return "CON Enter Points to redeem (Min 200):\n0. Back";
 
             default:
                 return "CON [Invalid Option!]\n\nChama Points Hub:\n1. View Points Balance\n2. Redeem Points\n0. Back";

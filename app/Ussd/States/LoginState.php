@@ -23,19 +23,17 @@ class LoginState implements UssdStateHandlerInterface
                 'pin'   => $lastInput
             ]);
 
-            // 3. Success
+            // 3. Success: Delegate menu rendering to the Main Menu State
             if (isset($response['status']) && $response['status'] === 'success') {
                 $utility->setTemplevel($sessionId, "MemberMainMenu");
-                return "CON Login successful! Welcome back.\n"
-                . "1. Check Balance\n"
-                . "2. Welfare\n"
-                . "3. Chama Points\n"
-                . "4. Loan Request\n"
-                . "5. Withdraw Request\n"
-                . "6. Customer Care";  
+                
+                // Instead of hardcoding the menu string here, we call the MainMenuState
+                // which already contains the dynamic logic to display '7. Agent Hub' 
+                // if the member has the 'agent' role.
+                return (new MemberMainMenuState())->handle($sessionId, $msisdn, "", [], $utility);
             }
 
-            // 4. Failure: Display exact API error
+            // 4. Failure
             $errorMessage = $response['message'] ?? 'Access denied. Please check your PIN.';
             return "END " . $errorMessage;
         }

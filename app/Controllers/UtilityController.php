@@ -124,4 +124,5 @@ class UtilityController extends Controller
         $response->getBody()->write($ussdResponse);
         return $response->withHeader('Content-Type', 'text/plain');
     }
+    
 }
