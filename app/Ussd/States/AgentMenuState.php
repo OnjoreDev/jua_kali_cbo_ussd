@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Ussd\States;
@@ -10,22 +11,31 @@ class AgentMenuState implements UssdStateHandlerInterface
 {
     public function handle(string $sessionId, string $msisdn, string $lastInput, array $inputArray, Utility $utility): string
     {
-        if (empty($lastInput)) {
+        // Handle initial entry or a menu navigation reset
+        if ($lastInput === "" || $lastInput === "00") {
             return "CON M-Pesa Agent Hub:\n1. Deposit (2 Pts)\n2. Withdraw (15 Pts)\n0. Back";
         }
 
         switch ($lastInput) {
             case '1':
+                // Advance the session track state to the phone collection layout
                 $utility->setTemplevel($sessionId, 'AgentCapturePhoneDeposit');
-                return "CON Enter Customer Phone Number for Deposit:";
+                return "CON Enter Customer Phone Number for Deposit:\n0. Back";
+
             case '2':
+                // Advance the session track state to the phone collection layout
                 $utility->setTemplevel($sessionId, 'AgentCapturePhoneWithdrawal');
-                return "CON Enter Customer Phone Number for Withdrawal:";
+                return "CON Enter Customer Phone Number for Withdrawal:\n0. Back";
+
             case '0':
+                // Return tracking status back to the main dashboard layer
                 $utility->setTemplevel($sessionId, 'MemberMainMenu');
-                return "CON Back to Main Menu...";
+                
+                // Instantly resolve and display the member's core menu
+                return (new MemberMainMenuState())->handle($sessionId, $msisdn, "", [], $utility);
+
             default:
-                return "CON Invalid. M-Pesa Agent Hub:\n1. Deposit\n2. Withdraw\n0. Back";
+                return "CON Invalid Choice!\nM-Pesa Agent Hub:\n1. Deposit (2 Pts)\n2. Withdraw (15 Pts)\n0. Back";
         }
     }
 }

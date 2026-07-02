@@ -53,7 +53,7 @@ class MemberMainMenuState implements UssdStateHandlerInterface
             case "2":
                 $utility->saveInput($lastInput, $sessionId);
                 $utility->setTemplevel($sessionId, "WelfareMenu");
-                return "CON Welfare Hub:\n1. Check Claims\n2. Deposit to Welfare\n0. Back";
+                return "CON Welfare Hub:\n1. Deposit\n2. Claim\n3. Status\n0. Back";
 
             case "3":
                 $points = $utility->getChamaPointsBalance($msisdn);

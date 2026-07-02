@@ -14,7 +14,7 @@ class AgentCapturePhoneWithdrawalState implements UssdStateHandlerInterface
 
     public function handle(string $sessionId, string $msisdn, string $lastInput, array $inputArray, Utility $utility): string
     {
-        if (empty($lastInput)) return "CON Enter Customer Phone (e.g. 0712345678):";
+        if (empty($lastInput)) return "CON Enter Customer Phone (e.g. 0712345678): \n0. Back";
 
         $formattedPhone = $this->normalizePhone($lastInput);
         if (!$utility->isMemberRegistered($formattedPhone)) {
